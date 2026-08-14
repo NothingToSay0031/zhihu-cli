@@ -38,11 +38,12 @@ tags:
 ## 安装与更新
 
 - **安装**（任选其一）：
-  - `uv tool install pyzhihu-cli`
-  - `pipx install pyzhihu-cli`
-  - `pip install pyzhihu-cli`
-- **更新**：按安装方式执行 `uv tool upgrade pyzhihu-cli`、`pipx upgrade pyzhihu-cli` 或 `pip install -U pyzhihu-cli`。用户问「升级/更新 zhihu」时提示其执行对应命令；不确定安装方式时可三种都给出。
+  - `uv tool install --force "git+https://github.com/NothingToSay0031/zhihu-cli.git"`（推荐，含 Markdown 发布功能）
+  - `pipx install "git+https://github.com/NothingToSay0031/zhihu-cli.git"`
+  - `uv tool install --editable --force <本地仓库路径>`（开发用）
+- **更新**：`uv tool upgrade pyzhihu-cli` 或对 git 安装执行 `uv tool install --force "git+https://github.com/NothingToSay0031/zhihu-cli.git"` 重新安装；本地 editable 安装改源码即生效。
 - **版本**：`zhihu --version` 查看当前版本。
+- **注意**：PyPI 公版 `pyzhihu-cli` 不含 `publish-md` / `publish-dir` 命令，请从本仓库安装。
 
 ---
 

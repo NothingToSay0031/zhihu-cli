@@ -15,7 +15,6 @@ from __future__ import annotations
 import json
 import logging
 import time
-from pathlib import Path
 
 import requests
 
@@ -23,15 +22,15 @@ from .config import (
     CONFIG_DIR,
     COOKIE_FILE,
     DEFAULT_TIMEOUT,
-    get_browser_headers,
     QRCODE_IMAGE_PATH,
     REQUIRED_COOKIES,
     ZHIHU_BASE_URL,
     ZHIHU_LOGIN_URL,
     ZHIHU_OAUTH_CAPTCHA,
     ZHIHU_QRCODE_API,
+    get_browser_headers,
 )
-from .display import console, print_error, print_hint, print_info, print_success, print_warning
+from .display import console, print_hint, print_info
 from .exceptions import LoginError
 
 logger = logging.getLogger(__name__)
@@ -55,7 +54,7 @@ def get_cookie_string() -> str | None:
 
 
 def _fetch_missing_cookies(cookie_dict: dict) -> dict:
-    """Request Zhihu homepage to obtain _xsrf and d_c0; return cookie_dict merged with received cookies."""
+    """Request Zhihu homepage to obtain missing _xsrf/d_c0; return merged dict."""
     if "z_c0" not in cookie_dict:
         return cookie_dict
     session = requests.Session()
@@ -75,7 +74,7 @@ def _fetch_missing_cookies(cookie_dict: dict) -> dict:
 
 
 def _load_saved_cookies() -> str | None:
-    """Load cookies from saved file. If _xsrf or d_c0 are missing but z_c0 exists, fetch them from Zhihu and save."""
+    """Load cookies from saved file; fetch missing _xsrf/d_c0 from Zhihu if needed."""
     if not COOKIE_FILE.exists():
         return None
 
@@ -311,7 +310,9 @@ def _save_qrcode_image(qr_text: str) -> None:
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
         img = qrcode.make(qr_text)
         img.save(QRCODE_IMAGE_PATH)
-        print_hint(f"二维码已保存至: [bold]{QRCODE_IMAGE_PATH}[/bold]（AI Agent 可读取并发送给用户扫码）")
+        msg = f"二维码已保存至: [bold]{QRCODE_IMAGE_PATH}[/bold]"
+        msg += "（AI Agent 可读取并发送给用户扫码）"
+        print_hint(msg)
     except Exception as e:
         logger.debug("Failed to save QR code image: %s", e)
 

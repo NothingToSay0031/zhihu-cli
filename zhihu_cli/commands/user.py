@@ -12,7 +12,6 @@ from ..auth import cookie_str_to_dict, get_cookie_string
 from ..display import (
     console,
     format_count,
-    format_stats_line,
     make_kv_table,
     make_table,
     print_error,

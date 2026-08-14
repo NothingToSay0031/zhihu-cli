@@ -20,7 +20,6 @@ from ..config import REQUIRED_COOKIES
 from ..display import (
     console,
     format_count,
-    format_stats_line,
     make_kv_table,
     print_error,
     print_hint,
@@ -75,7 +74,8 @@ def login(ctx: click.Context, qrcode: bool, cookie_str: str | None):
     if cookie_provided:
         parsed = cookie_str_to_dict(cookie_str or "")
         if not REQUIRED_COOKIES.issubset(parsed.keys()):
-            print_error("Invalid cookie — must contain [bold]z_c0[/bold], [bold]_xsrf[/bold], [bold]d_c0[/bold]")
+            required = ", ".join(sorted(REQUIRED_COOKIES))
+            print_error(f"Invalid cookie — must contain {required}")
             sys.exit(1)
         save_cookies("; ".join(f"{k}={v}" for k, v in parsed.items()))
         print_success("Cookie saved")

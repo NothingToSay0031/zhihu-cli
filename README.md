@@ -3,7 +3,6 @@
 [![PyPI version](https://img.shields.io/pypi/v/pyzhihu-cli?label=PyPI)](https://pypi.org/project/pyzhihu-cli/)
 [![PyPI - Python Version](https://img.shields.io/pypi/pyversions/pyzhihu-cli)](https://pypi.org/project/pyzhihu-cli/)
 [![PyPI - License](https://img.shields.io/pypi/l/pyzhihu-cli)](https://pypi.org/project/pyzhihu-cli/)
-[![ClawHub](https://img.shields.io/badge/ClawHub-install-E65100)](https://clawhub.ai/BAIGUANGMEI/pyzhihu-cli)
 
 知乎命令行工具 — 在终端搜索问题、查看回答、发布提问、发布想法、发布文章(图文混合，富文本支持)、浏览热榜
 
@@ -45,27 +44,24 @@
 需要 Python 3.10+。
 
 ```bash
-# 推荐：使用 uv
-uv tool install pyzhihu-cli
+# 推荐：从本仓库源码安装（包含 Markdown 发布等自定义功能）
+uv tool install --force "git+https://github.com/NothingToSay0031/zhihu-cli.git"
 
-# 或使用 pipx
-pipx install pyzhihu-cli
+# 或使用 pipx 从源码安装
+pipx install "git+https://github.com/NothingToSay0031/zhihu-cli.git"
 
-# 从源码安装（开发用）
+# 本地源码安装（开发用，改代码即时生效）
+uv tool install --editable --force <本地仓库路径>
 pip install -e .
 ```
+
+> **注意**：PyPI 上的 `pyzhihu-cli` 是原作者的公版，**不包含** `publish-md` / `publish-dir` 等 Markdown 发布功能。要使用本仓库的功能，请从上述 git 地址安装。
 
 二维码登录使用知乎 API（`/api/v3/account/api/login/qrcode`），**无需安装 Playwright**，仅需本工具依赖的 `requests` 与 `qrcode`。
 
 ## AI Agent Skill
 
-本项目提供了 AI Agent Skill，可通过 [OpenClaw](https://openclaw.ai) 下载使用：
-
-```
-clawhub install pyzhihu-cli
-```
-
-安装后，AI Agent 可自动获取 zhihu-cli 的完整使用说明、命令参考、项目架构和开发指南。
+本项目提供了 AI Agent Skill（位于 `skill/SKILL.md`），可让 AI Agent 自动获取 zhihu-cli 的完整使用说明、命令参考、项目架构和开发指南。可直接将 `skill/SKILL.md` 内容复制到 Agent 的技能配置中使用。
 
 **扫码登录与 Agent**：执行 `zhihu login --qrcode` 时，二维码会保存为 **`~/.zhihu-cli/login_qrcode.png`**（Windows 为 `%USERPROFILE%\.zhihu-cli\login_qrcode.png`）。Agent 可读取该图片并发送给用户，由用户在知乎 App 中扫码完成登录。
 
@@ -198,8 +194,6 @@ zhihu ask "什么是机器学习？" -d "请详细解释" -t 19550517 -t 1955127
 # 发布想法（标题 + 可选正文，正文可用 HTML）
 zhihu pin "今天天气真好！"
 zhihu pin "标题" -c "想法正文内容"
-
-# 发布文章
 zhihu article "文章标题" "文章内容"
 zhihu article "标题" "内容" -t 19550517
 
@@ -208,12 +202,25 @@ zhihu ask "求推荐" -d "详情" -i photo.jpg
 zhihu pin "标题" -c "正文" -i image1.jpg -i image2.jpg
 zhihu article "标题" "内容" -i cover.jpg
 
+# 发布 Markdown 文件（标题取文内第一个 # H1；正文支持表格/代码块/本地图片自动上传）
+zhihu publish-md 文章.md
+zhihu publish-md 文章.md -t 19550517
+
+# 批量发布文件夹中的所有 Markdown（默认 *.md，记录已发布状态，未修改的文件自动跳过）
+zhihu publish-dir ./articles
+zhihu publish-dir ./articles --recursive --pattern "*.md"
+zhihu publish-dir ./articles --dry-run    # 仅预览将要发布的内容
+zhihu publish-dir ./articles --force      # 忽略已发布状态，全部重新发布
+zhihu publish-md 文章.md --force          # 修改后的文件重新发布
+
 # 删除自己发布的内容（会提示确认，加 -y 跳过确认）
 zhihu delete-question <问题ID>
 zhihu delete-pin <想法ID>
 zhihu delete-article <文章ID>
 zhihu delete-question 12345678 -y
 ```
+
+> **Markdown 发布说明**：`publish-md` / `publish-dir` 将 Markdown 转换为知乎富文本 HTML。表格使用知乎编辑器格式（`data-draft-type="table"`），代码块使用 `<pre lang>`，文中本地图片（相对路径）会自动上传到知乎。
 
 ### 其他
 

@@ -15,7 +15,6 @@ from ..display import (
     format_stats_line,
     make_table,
     print_error,
-    print_hint,
     print_info,
     strip_html,
 )
@@ -95,7 +94,8 @@ def search(query: str, search_type: str, limit: int, answers: int, as_json: bool
                         a_content = strip_html(a.get("excerpt", a.get("content", "")))
                         a_upvotes = format_count(a.get("voteup_count", 0))
                         console.print(
-                            f"    [dim]{a_author}:[/dim] {a_content}  [dim]{a_upvotes} upvotes[/dim]"
+                            f"    [dim]{a_author}:[/dim] {a_content}  "
+                            f"[dim]{a_upvotes} upvotes[/dim]"
                         )
 
         console.print()
@@ -152,7 +152,8 @@ def hot(limit: int, answers: int, as_json: bool):
                         a_excerpt = strip_html(a.get("excerpt", a.get("content", "")))
                         a_upvotes = format_count(a.get("voteup_count", 0))
                         console.print(
-                            f"    [dim]{a_author}:[/dim] {a_excerpt}  [dim]{a_upvotes} upvotes[/dim]"
+                            f"    [dim]{a_author}:[/dim] {a_excerpt}  "
+                            f"[dim]{a_upvotes} upvotes[/dim]"
                         )
                 else:
                     console.print("    [dim]No answers[/dim]")
@@ -353,7 +354,10 @@ def feed(limit: int, as_json: bool):
 
 @click.command()
 @click.option("-l", "--limit", default=6, help="Number of feed items", show_default=True)
-@click.option("-c", "--comment-limit", default=10, help="Comments per item (0=hide)", show_default=True)
+@click.option(
+    "-c", "--comment-limit", default=10,
+    help="Comments per item (0=hide)", show_default=True,
+)
 def feeds(limit: int, comment_limit: int):
     """Show recommended feed with comments (推荐+评论)."""
     with _get_client() as client:

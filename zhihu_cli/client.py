@@ -22,13 +22,13 @@ from PIL import Image
 
 from .config import (
     DEFAULT_TIMEOUT,
-    get_browser_headers,
     ZHIHU_API_V4,
     ZHIHU_CONTENT_DRAFTS_URL,
     ZHIHU_CONTENT_PUBLISH_URL,
     ZHIHU_IMAGE_API,
     ZHIHU_OSS_UPLOAD_URL,
     ZHIHU_ZHUANLAN_API,
+    get_browser_headers,
 )
 from .exceptions import DataFetchError, LoginError
 
@@ -197,7 +197,8 @@ class ZhihuClient:
         """Get user profile by url_token.
 
         Args:
-            url_token: The user's URL token (e.g., 'excited-vibe' from zhihu.com/people/excited-vibe).
+            url_token: The user's URL token
+                (e.g., 'excited-vibe' from zhihu.com/people/excited-vibe).
         """
         url = f"{ZHIHU_API_V4}/members/{url_token}"
         params = {
@@ -695,7 +696,8 @@ class ZhihuClient:
             }
             for info in image_infos
         ]
-        html = content + self._build_img_html(image_infos) if content else self._build_img_html(image_infos)
+        img_html = self._build_img_html(image_infos)
+        html = content + img_html if content else img_html
         payload = {
             "action": "pin",
             "data": {
@@ -706,7 +708,7 @@ class ZhihuClient:
                 "title": {"title": title},
                 "hybrid": {
                     "html": html,
-                    "textLength": len(title) + len(content),
+                    "textLength": len(content),
                 },
                 "media": {"medias": medias},
             },

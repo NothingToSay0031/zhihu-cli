@@ -32,8 +32,8 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/BAIGUANGMEI/zhihu-cli"
-Repository = "https://github.com/BAIGUANGMEI/zhihu-cli"
+Homepage = "https://github.com/NothingToSay0031/zhihu-cli"
+Repository = "https://github.com/NothingToSay0031/zhihu-cli"
 
 [project.scripts]
 zhihu = "zhihu_cli.cli:cli"
