@@ -13,6 +13,7 @@ _IMAGE_RE = re.compile(r"!\[([^\]]*)\]\(([^)\s]+)\)")
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.*)")
 _UL_RE = re.compile(r"^\s*[-*+]\s+(.*)")
 _OL_RE = re.compile(r"^\s*\d+[.、]\s+(.*)")
+_QUOTE_RE = re.compile(r"^\s*>\s?(.*)")
 _HR_RE = re.compile(r"^\s*([-*_])(\s*\1){2,}\s*$")
 _TABLE_SEP_RE = re.compile(r"^\|?[\s:\-|]+\|?\s*$")
 _FENCE_RE = re.compile(r"^```|^~~~")
@@ -59,6 +60,103 @@ def _inline(text: str, image_map: dict[str, dict]) -> str:
     text = _BOLD_RE.sub(r"<strong>\1</strong>", text)
     text = _CODE_RE.sub(r"<code>\1</code>", text)
     return text
+
+
+def _emit_list(
+    out: list[str],
+    lines: list[str],
+    i: int,
+    n: int,
+    ordered: bool,
+    image_map: dict[str, dict],
+) -> int:
+    """Emit a whole list (ordered or unordered) starting at lines[i].
+
+    Consecutive list items (possibly separated by blank lines, nested
+    blockquotes or indented continuation paragraphs) are kept inside a
+    single <ol>/<ul> so Zhihu renders the numbering correctly.
+    Returns the index of the first line after the list.
+    """
+    is_item = _OL_RE.match if ordered else _UL_RE.match
+    tag = "ol" if ordered else "ul"
+    out.append(f"<{tag}>")
+    segments: list[tuple[str, str]] = []
+
+    def flush_li() -> None:
+        if not segments:
+            return
+        inner = "".join(
+            _inline(txt, image_map) if kind == "text" else txt
+            for kind, txt in segments
+        )
+        out.append(f"<li>{inner}</li>")
+        segments.clear()
+
+    while i < n:
+        line = lines[i].rstrip()
+        m = is_item(line)
+        if m:
+            flush_li()
+            segments.append(("text", m.group(1).strip()))
+            i += 1
+            continue
+        if not line.strip():
+            j = i
+            while j < n and not lines[j].strip():
+                j += 1
+            if j >= n:
+                i = j
+                break
+            nxt = lines[j].rstrip()
+            if is_item(nxt) or _QUOTE_RE.match(nxt) or _is_li_continuation(nxt):
+                i = j
+                continue
+            break
+        q = _QUOTE_RE.match(line)
+        if q:
+            buf = [q.group(1).strip()]
+            i += 1
+            while i < n:
+                q2 = _QUOTE_RE.match(lines[i].rstrip())
+                if q2:
+                    buf.append(q2.group(1).strip())
+                    i += 1
+                else:
+                    break
+            segments.append(
+                (
+                    "html",
+                    '<blockquote data-draft-node="block" data-draft-type="blockquote">'
+                    + _inline(" ".join(buf), image_map)
+                    + "</blockquote>",
+                )
+            )
+            continue
+        if _is_li_continuation(line):
+            if segments and segments[-1][0] == "text":
+                segments[-1] = ("text", segments[-1][1] + " " + line.strip())
+            else:
+                segments.append(("text", line.strip()))
+            i += 1
+            continue
+        break
+    flush_li()
+    out.append(f"</{tag}>")
+    return i
+
+
+def _is_li_continuation(line: str) -> bool:
+    """Indented text that belongs to the current list item (continuation)."""
+    s = line.lstrip()
+    return (
+        bool(re.match(r"^\s+\S", line))
+        and not _HEADING_RE.match(s)
+        and not _FENCE_RE.match(s)
+        and not _HR_RE.match(s)
+        and not s.startswith("|")
+        and not _UL_RE.match(s)
+        and not _OL_RE.match(s)
+    )
 
 
 def md_to_html(md_text: str, image_map: dict[str, dict] | None = None) -> str:
@@ -133,35 +231,35 @@ def md_to_html(md_text: str, image_map: dict[str, dict] | None = None) -> str:
             i += 1
             continue
 
-        if line.startswith("> "):
+        q = _QUOTE_RE.match(line)
+        if q:
             close_table()
-            buf = []
-            while i < n and lines[i].startswith("> "):
-                buf.append(lines[i][2:].strip())
-                i += 1
-            out.append("<blockquote>" + _inline(" ".join(buf), image_map) + "</blockquote>")
+            buf = [q.group(1).strip()]
+            i += 1
+            while i < n:
+                q2 = _QUOTE_RE.match(lines[i].rstrip())
+                if q2:
+                    buf.append(q2.group(1).strip())
+                    i += 1
+                else:
+                    break
+            out.append(
+                '<blockquote data-draft-node="block" data-draft-type="blockquote">'
+                + _inline(" ".join(buf), image_map)
+                + "</blockquote>"
+            )
             continue
 
         m = _UL_RE.match(line)
         if m:
             close_table()
-            out.append("<ul>")
-            while i < n and _UL_RE.match(lines[i]):
-                item = _UL_RE.match(lines[i]).group(1).strip()
-                out.append(f"<li>{_inline(item, image_map)}</li>")
-                i += 1
-            out.append("</ul>")
+            i = _emit_list(out, lines, i, n, False, image_map)
             continue
 
         m = _OL_RE.match(line)
         if m:
             close_table()
-            out.append("<ol>")
-            while i < n and _OL_RE.match(lines[i]):
-                item = _OL_RE.match(lines[i]).group(1).strip()
-                out.append(f"<li>{_inline(item, image_map)}</li>")
-                i += 1
-            out.append("</ol>")
+            i = _emit_list(out, lines, i, n, True, image_map)
             continue
 
         close_table()
@@ -170,7 +268,8 @@ def md_to_html(md_text: str, image_map: dict[str, dict] | None = None) -> str:
         while (
             i < n
             and lines[i].strip()
-            and not lines[i].startswith(("#", "|", ">", "```", "~~~"))
+            and not _QUOTE_RE.match(lines[i])
+            and not lines[i].lstrip().startswith(("#", "|", ">", "```", "~~~"))
             and not _UL_RE.match(lines[i])
             and not _OL_RE.match(lines[i])
             and not _HR_RE.match(lines[i].strip())

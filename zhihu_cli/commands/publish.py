@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 import sys
 from contextlib import contextmanager
 from pathlib import Path
@@ -17,8 +16,6 @@ from ..display import print_error, print_hint, print_info, print_success, print_
 from ..markdown import extract_local_images, md_to_html
 
 PUBLISHED_FILE = CONFIG_DIR / "published.json"
-
-_TITLE_RE = re.compile(r"^#\s+(.+)")
 
 
 @contextmanager
@@ -53,20 +50,16 @@ def _file_hash(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def _extract_title(md_text: str, fallback: str) -> str:
-    m = _TITLE_RE.search(md_text)
-    return m.group(1).strip() if m else fallback
+def _md_to_article(client, md_path: Path) -> tuple[str, str]:
+    """Convert a markdown file to (title, html).
 
-
-def _body_without_title(md_text: str) -> str:
-    m = _TITLE_RE.search(md_text)
-    return md_text[m.end():].strip() if m else md_text.strip()
-
-
-def publish_markdown(client, md_path: Path, topics: list[str]) -> tuple[str, str]:
-    """Publish one markdown file. Returns (title, article_id)."""
+    Article title is taken from the file name (stem) instead of the first
+    heading in the body: in-place headings may be absent or may be matched
+    inside fenced code blocks (e.g. a ``# Cargo.toml`` line), which would
+    produce a wrong title and truncate the body.
+    """
     text = md_path.read_text(encoding="utf-8")
-    title = _extract_title(text, md_path.stem)
+    title = md_path.stem
 
     image_map: dict[str, dict] = {}
     local_images = extract_local_images(text, md_path.parent)
@@ -78,7 +71,12 @@ def publish_markdown(client, md_path: Path, topics: list[str]) -> tuple[str, str
         except Exception as e:
             print_warning(f"  Image upload failed ({img_path.name}): {e}")
 
-    html = md_to_html(_body_without_title(text), image_map)
+    return title, md_to_html(text, image_map)
+
+
+def publish_markdown(client, md_path: Path, topics: list[str]) -> tuple[str, str]:
+    """Publish one markdown file. Returns (title, article_id)."""
+    title, html = _md_to_article(client, md_path)
     result = client.create_article(
         title=title, content=html, topic_ids=list(topics) if topics else None
     )
@@ -126,6 +124,7 @@ def publish_md(file: Path, topics: tuple[str, ...], force: bool):
 @click.option("-r", "--recursive", is_flag=True, help="Scan subdirectories too")
 @click.option("--dry-run", is_flag=True, help="Show what would be published, publish nothing")
 @click.option("--force", is_flag=True, help="Republish even if unchanged since last run")
+@click.option("--update", is_flag=True, help="Update existing articles in place (keep IDs)")
 def publish_dir(
     directory: Path,
     topics: tuple[str, ...],
@@ -133,6 +132,7 @@ def publish_dir(
     recursive: bool,
     dry_run: bool,
     force: bool,
+    update: bool,
 ):
     """Publish all markdown files in a directory (批量发布文件夹中的 Markdown)."""
     if recursive:
@@ -152,8 +152,10 @@ def publish_dir(
             key = str(f)
             h = _file_hash(f)
             state = published.get(key)
-            if state and state.get("sha256") == h and not force:
+            if state and state.get("sha256") == h and not force and not update:
                 print_hint(f"  [skip] (unchanged) {f.name}")
+            elif state and update and not force:
+                print_info(f"  [update] {f.name}")
             elif state:
                 print_info(f"  [republish] {f.name}")
             else:
@@ -165,9 +167,23 @@ def publish_dir(
         key = str(f)
         h = _file_hash(f)
         state = published.get(key)
-        if state and state.get("sha256") == h and not force:
+        if state and state.get("sha256") == h and not force and not update:
             print_hint(f"[skip] (unchanged, id={state.get('article_id', '?')}) {f.name}")
             skipped += 1
+            continue
+        article_id = state.get("article_id", "") if state else ""
+        if update and article_id and not force:
+            print_info(f"[update] {f.name}")
+            try:
+                with _get_client() as client:
+                    title = update_markdown(client, f, article_id, list(topics))
+                published[key] = {"sha256": h, "article_id": article_id, "title": title}
+                _save_published(published)
+                print_success(f"  OK  {title}  ->  https://zhuanlan.zhihu.com/p/{article_id}")
+                ok += 1
+            except Exception as e:
+                print_error(f"  FAIL {f.name}: {e}")
+                failed += 1
             continue
         print_info(f"[publish] {f.name}")
         try:
@@ -182,3 +198,36 @@ def publish_dir(
             failed += 1
 
     print_success(f"\nDone: {ok} published, {skipped} skipped, {failed} failed")
+
+
+def update_markdown(
+    client, md_path: Path, article_id: str, topics: list[str]
+) -> str:
+    """Update an existing article from a markdown file in place. Returns title."""
+    title, html = _md_to_article(client, md_path)
+    client.update_article(
+        article_id=article_id,
+        title=title,
+        content=html,
+        topic_ids=list(topics) if topics else None,
+    )
+    return title
+
+
+@click.command("update-md")
+@click.argument("file", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.option("--article-id", required=True, help="ID of the existing article to update")
+@click.option("-t", "--topic", "topics", multiple=True, help="Topic ID (repeatable)")
+def update_md(file: Path, article_id: str, topics: tuple[str, ...]):
+    """Update an existing article from a markdown file, keeping its ID (原地更新文章)."""
+    try:
+        with _get_client() as client:
+            title = update_markdown(client, file, article_id, list(topics))
+        print_success(
+            f"Article updated!  [bold]{title}[/bold]\n"
+            f"  ID: [bold]{article_id}[/bold]\n"
+            f"  https://zhuanlan.zhihu.com/p/{article_id}"
+        )
+    except Exception as e:
+        print_error(f"Failed to update article: {e}")
+        sys.exit(1)

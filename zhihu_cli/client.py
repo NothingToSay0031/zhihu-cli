@@ -815,6 +815,56 @@ class ZhihuClient:
 
     # ===== Delete Own Content =====
 
+    def update_article(
+        self,
+        article_id: str,
+        title: str,
+        content: str,
+        topic_ids: list[str] | None = None,
+    ) -> dict:
+        """Update an existing article in place (keeps the article ID).
+
+        The Zhihu edit flow for an already-published article is:
+        PATCH /articles/{id}/draft with the new title/content, then
+        PUT /articles/{id}/publish.
+        """
+        base = ZHIHU_ZHUANLAN_API
+        patch_data: dict[str, Any] = {"title": title, "content": content}
+        if topic_ids:
+            patch_data["topics"] = topic_ids
+        try:
+            resp = self._session.patch(
+                f"{base}/articles/{article_id}/draft",
+                json=patch_data,
+                timeout=DEFAULT_TIMEOUT,
+            )
+        except requests.RequestException as e:
+            raise DataFetchError(f"Update article draft failed: {e}") from e
+        if resp.status_code == 401:
+            raise LoginError("Session expired or not logged in")
+        if resp.status_code != 200:
+            raise DataFetchError(
+                f"Update article draft failed ({resp.status_code}): {resp.text[:200]}"
+            )
+        try:
+            resp = self._session.put(
+                f"{base}/articles/{article_id}/publish",
+                json={"column": None, "commentPermission": "anyone"},
+                timeout=DEFAULT_TIMEOUT,
+            )
+        except requests.RequestException as e:
+            raise DataFetchError(f"Publish article update failed: {e}") from e
+        if resp.status_code == 401:
+            raise LoginError("Session expired or not logged in")
+        if resp.status_code != 200:
+            raise DataFetchError(
+                f"Publish article update failed ({resp.status_code}): {resp.text[:200]}"
+            )
+        try:
+            return resp.json()
+        except ValueError:
+            return {}
+
     def delete_question(self, question_id: str) -> bool:
         """Delete a question created by the current user.
 

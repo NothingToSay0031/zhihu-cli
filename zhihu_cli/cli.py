@@ -21,7 +21,7 @@ from .commands.interact import (
     pin,
     vote,
 )
-from .commands.publish import publish_dir, publish_md
+from .commands.publish import publish_dir, publish_md, update_md
 from .commands.user import followers, following, user, user_answers, user_articles
 
 
@@ -73,6 +73,7 @@ cli.add_command(pin)
 cli.add_command(article)
 cli.add_command(publish_md)
 cli.add_command(publish_dir)
+cli.add_command(update_md)
 cli.add_command(delete_question)
 cli.add_command(delete_pin)
 cli.add_command(delete_article_cmd)
