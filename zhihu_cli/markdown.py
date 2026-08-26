@@ -62,6 +62,31 @@ def _inline(text: str, image_map: dict[str, dict]) -> str:
     return text
 
 
+def _fence_then_item(
+    lines: list[str], j: int, n: int, is_item, other_item, base_indent: int
+) -> bool:
+    """True if the fenced block at lines[j] is followed (after its closing
+    fence) by a list item that resumes the current list."""
+    k = j + 1
+    while k < n:
+        if not lines[k].strip():
+            k += 1
+            continue
+        if _FENCE_RE.match(lines[k].strip()):
+            k += 1
+            break
+        k += 1
+    while k < n:
+        line = lines[k].rstrip()
+        if not line.strip():
+            k += 1
+            continue
+        if len(line) - len(line.lstrip()) < base_indent:
+            return False
+        return bool(is_item(line) or other_item(line))
+    return False
+
+
 def _emit_list(
     out: list[str],
     lines: list[str],
@@ -73,33 +98,36 @@ def _emit_list(
     """Emit a whole list (ordered or unordered) starting at lines[i].
 
     Consecutive list items (possibly separated by blank lines, nested
-    blockquotes or indented continuation paragraphs) are kept inside a
+    blockquotes, fenced code blocks or nested lists) are kept inside a
     single <ol>/<ul> so Zhihu renders the numbering correctly.
     Returns the index of the first line after the list.
     """
     is_item = _OL_RE.match if ordered else _UL_RE.match
+    other_item = _UL_RE.match if ordered else _OL_RE.match
     tag = "ol" if ordered else "ul"
     out.append(f"<{tag}>")
     segments: list[tuple[str, str]] = []
+    nested: list[str] = []
+    base_indent: int | None = None
 
     def flush_li() -> None:
-        if not segments:
+        nonlocal segments, nested
+        if not segments and not nested:
             return
         inner = "".join(
             _inline(txt, image_map) if kind == "text" else txt
             for kind, txt in segments
         )
+        if nested:
+            inner += "".join(nested)
         out.append(f"<li>{inner}</li>")
-        segments.clear()
+        segments = []
+        nested = []
 
     while i < n:
         line = lines[i].rstrip()
-        m = is_item(line)
-        if m:
-            flush_li()
-            segments.append(("text", m.group(1).strip()))
-            i += 1
-            continue
+        if base_indent is None:
+            base_indent = len(line) - len(line.lstrip())
         if not line.strip():
             j = i
             while j < n and not lines[j].strip():
@@ -108,8 +136,58 @@ def _emit_list(
                 i = j
                 break
             nxt = lines[j].rstrip()
-            if is_item(nxt) or _QUOTE_RE.match(nxt) or _is_li_continuation(nxt):
+            nxt_indent = len(nxt) - len(nxt.lstrip())
+            if nxt_indent >= base_indent and (
+                is_item(nxt)
+                or other_item(nxt)
+                or _QUOTE_RE.match(nxt)
+                or _is_li_continuation(nxt)
+                or (
+                    _FENCE_RE.match(nxt.strip())
+                    and _fence_then_item(lines, j, n, is_item, other_item, base_indent)
+                )
+            ):
                 i = j
+                continue
+            break
+
+        indent = len(line) - len(line.lstrip())
+        m = is_item(line)
+        if m:
+            if indent > base_indent:
+                sub: list[str] = []
+                i = _emit_list(sub, lines, i, n, ordered, image_map)
+                nested.append("".join(sub))
+                continue
+            flush_li()
+            segments.append(("text", m.group(1).strip()))
+            i += 1
+            continue
+        m2 = other_item(line)
+        if m2:
+            if indent > base_indent:
+                sub = []
+                i = _emit_list(sub, lines, i, n, not ordered, image_map)
+                nested.append("".join(sub))
+                continue
+            break
+        if _FENCE_RE.match(line.strip()):
+            if _fence_then_item(lines, i, n, is_item, other_item, base_indent):
+                fence = line.strip()
+                lang = fence[3:].strip()
+                buf: list[str] = []
+                i += 1
+                while i < n and not _FENCE_RE.match(lines[i].strip()):
+                    buf.append(lines[i])
+                    i += 1
+                i += 1
+                code = html.escape("\n".join(buf))
+                lang_attr = f' lang="{lang}"' if lang else ""
+                pre = f"<pre{lang_attr}>{code}</pre>"
+                if nested:
+                    nested.append(pre)
+                else:
+                    segments.append(("html", pre))
                 continue
             break
         q = _QUOTE_RE.match(line)
