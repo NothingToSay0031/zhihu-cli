@@ -140,7 +140,7 @@ def _emit_list(
             if nxt_indent >= base_indent and (
                 is_item(nxt)
                 or other_item(nxt)
-                or _QUOTE_RE.match(nxt)
+                or (nxt_indent > base_indent and _QUOTE_RE.match(nxt))
                 or _is_li_continuation(nxt)
                 or (
                     _FENCE_RE.match(nxt.strip())

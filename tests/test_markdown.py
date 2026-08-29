@@ -67,3 +67,38 @@ def test_nested_list_in_unordered_list():
     assert html.count("<ol>") == 1
     assert html.count("<li>") == 5
     assert html.index("</ol>") < html.index("<li>c</li>")
+
+
+def test_margin_quote_after_blank_line_stays_out_of_list():
+    md = (
+        "- 在动手做出有趣东西的过程中，你能够：\n"
+        "  - 真正理解软件工程；\n"
+        "  - 做出真实作品。\n"
+        "\n"
+        "> 教授观点：一篇已发表的论文只是“加分项”。\n"
+        "\n"
+        "---\n"
+        "\n"
+        "### 下一节\n"
+    )
+    html = md_to_html(md)
+    ul_end = html.index("</ul>")
+    quote = html.index("教授观点")
+    hr = html.index("<hr>")
+    assert html.count("<ul>") == 2  # outer list + nested sublist
+    assert ul_end < quote < hr
+
+
+def test_indented_quote_after_blank_line_stays_in_item():
+    md = (
+        "- 老师的整个配置过程只用了**一个 prompt**，大意是：\n"
+        "\n"
+        "  > “帮我把命令行终端配置成现代的样子。”\n"
+        "\n"
+        "- 用的模型依然只是 DeepSeek V4 Flash；\n"
+    )
+    html = md_to_html(md)
+    assert html.count("<ul>") == 1
+    assert html.count("<li>") == 2
+    first_li_end = html.index("</li>")
+    assert html.index("帮我把命令行终端") < first_li_end
