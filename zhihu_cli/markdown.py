@@ -5,6 +5,7 @@ from __future__ import annotations
 import html
 import re
 from pathlib import Path
+from urllib.parse import quote
 
 _BOLD_RE = re.compile(r"\*\*(.+?)\*\*")
 _CODE_RE = re.compile(r"`([^`]+?)`")
@@ -17,6 +18,11 @@ _QUOTE_RE = re.compile(r"^\s*>\s?(.*)")
 _HR_RE = re.compile(r"^\s*([-*_])(\s*\1){2,}\s*$")
 _TABLE_SEP_RE = re.compile(r"^\|?[\s:\-|]+\|?\s*$")
 _FENCE_RE = re.compile(r"^```|^~~~")
+_DISPLAY_MATH_RE = re.compile(r"\$\$([\s\S]+?)\$\$")
+_INLINE_MATH_RE = re.compile(
+    r"(?<!\$)\$(?!\$)([^\s$](?:[^$\n]*[^\s$])?)\$(?!\$)"
+)
+_SLOT_RE = re.compile(r"@@@ZHIHU_PH_(\d+)@@@")
 
 
 def extract_local_images(md_text: str, base_dir: Path) -> dict[str, Path]:
@@ -41,7 +47,64 @@ def _img_tag(src: str, alt: str, width: int = 0, height: int = 0) -> str:
     )
 
 
+def _normalize_tex(tex: str) -> str:
+    return re.sub(r"\s+", " ", tex.strip())
+
+
+def _formula_img(tex: str, *, display: bool = False) -> str:
+    """Zhihu keeps ``img[eeimg]`` formula nodes; empty ``ztext-math`` spans are stripped."""
+    tex = _normalize_tex(tex)
+    encoded = quote(tex, safe="")
+    alt = html.escape(tex, quote=True)
+    eeimg = "2" if display else "1"
+    return (
+        f'<img src="https://www.zhihu.com/equation?tex={encoded}" '
+        f'alt="{alt}" class="ee_img tr_noresize" eeimg="{eeimg}">'
+    )
+
+
+def _consume_display_math(
+    lines: list[str], i: int, n: int
+) -> tuple[str, int] | None:
+    """Parse a ``$$...$$`` block starting at lines[i]. Returns (html, next_i)."""
+    stripped = lines[i].strip()
+    if not stripped.startswith("$$"):
+        return None
+    rest = stripped[2:]
+    close_at = rest.find("$$")
+    if close_at >= 0:
+        inner = rest[:close_at]
+        if not _normalize_tex(inner):
+            return None
+        return f"<p>{_formula_img(inner, display=True)}</p>", i + 1
+    buf = [rest] if rest.strip() else []
+    j = i + 1
+    while j < n:
+        ts = lines[j].strip()
+        close_at = ts.find("$$")
+        if close_at >= 0:
+            before = ts[:close_at]
+            if before.strip():
+                buf.append(before)
+            inner = "\n".join(buf)
+            if not _normalize_tex(inner):
+                return None
+            return f"<p>{_formula_img(inner, display=True)}</p>", j + 1
+        buf.append(lines[j].rstrip())
+        j += 1
+    return None
+
+
 def _inline(text: str, image_map: dict[str, dict]) -> str:
+    slots: list[tuple[str, str]] = []
+
+    def stash(kind: str, raw: str) -> str:
+        slots.append((kind, raw))
+        return f"@@@ZHIHU_PH_{len(slots) - 1}@@@"
+
+    text = _CODE_RE.sub(lambda m: stash("code", m.group(1)), text)
+    text = _DISPLAY_MATH_RE.sub(lambda m: stash("math-display", m.group(1)), text)
+    text = _INLINE_MATH_RE.sub(lambda m: stash("math-inline", m.group(1)), text)
     text = html.escape(text, quote=False)
 
     def img_repl(m: re.Match) -> str:
@@ -58,8 +121,14 @@ def _inline(text: str, image_map: dict[str, dict]) -> str:
     text = _IMAGE_RE.sub(img_repl, text)
     text = _LINK_RE.sub(r'<a href="\2">\1</a>', text)
     text = _BOLD_RE.sub(r"<strong>\1</strong>", text)
-    text = _CODE_RE.sub(r"<code>\1</code>", text)
-    return text
+
+    def restore(m: re.Match) -> str:
+        kind, raw = slots[int(m.group(1))]
+        if kind == "code":
+            return f"<code>{html.escape(raw, quote=False)}</code>"
+        return _formula_img(raw, display=kind == "math-display")
+
+    return _SLOT_RE.sub(restore, text)
 
 
 def _fence_then_item(
@@ -232,6 +301,7 @@ def _is_li_continuation(line: str) -> bool:
         and not _FENCE_RE.match(s)
         and not _HR_RE.match(s)
         and not s.startswith("|")
+        and not s.startswith("$$")
         and not _UL_RE.match(s)
         and not _OL_RE.match(s)
     )
@@ -273,6 +343,14 @@ def md_to_html(md_text: str, image_map: dict[str, dict] | None = None) -> str:
             code = html.escape("\n".join(buf))
             lang_attr = f' lang="{lang}"' if lang else ""
             out.append(f"<pre{lang_attr}>{code}</pre>")
+            continue
+
+        math = _consume_display_math(lines, i, n)
+        if math is not None:
+            close_table()
+            html_block, nxt = math
+            out.append(html_block)
+            i = nxt
             continue
 
         if _HR_RE.match(line):
@@ -347,7 +425,7 @@ def md_to_html(md_text: str, image_map: dict[str, dict] | None = None) -> str:
             i < n
             and lines[i].strip()
             and not _QUOTE_RE.match(lines[i])
-            and not lines[i].lstrip().startswith(("#", "|", ">", "```", "~~~"))
+            and not lines[i].lstrip().startswith(("#", "|", ">", "```", "~~~", "$$"))
             and not _UL_RE.match(lines[i])
             and not _OL_RE.match(lines[i])
             and not _HR_RE.match(lines[i].strip())

@@ -102,3 +102,57 @@ def test_indented_quote_after_blank_line_stays_in_item():
     assert html.count("<li>") == 2
     first_li_end = html.index("</li>")
     assert html.index("帮我把命令行终端") < first_li_end
+
+
+def test_display_math_single_line_becomes_equation_image():
+    html = md_to_html(
+        r"$$ C = C_{\text{system}} + C_{\text{project}} + C_{\text{user}} $$"
+    )
+    assert "$$" not in html
+    assert 'eeimg="2"' in html
+    assert "https://www.zhihu.com/equation?tex=" in html
+    assert "%2B" in html
+    assert r"C_{\text{system}}" in html
+    assert html.startswith("<p><img ")
+    assert html.strip().endswith("></p>")
+
+
+def test_display_math_multiline_collapses_to_one_formula():
+    md = (
+        "$$\n"
+        r"\text{Agent Context}"
+        "\n=\n"
+        r"\text{System Prompt}"
+        "\n+\n"
+        r"\text{User Messages}"
+        "\n$$"
+    )
+    html = md_to_html(md)
+    assert "$$" not in html
+    assert html.count("equation?tex=") == 1
+    assert r"\text{Agent Context}" in html
+    assert r"\text{User Messages}" in html
+
+
+def test_inline_math_in_paragraph_and_list():
+    html = md_to_html("* $x_0$：最初的尝试；\n* $x^*$：最终解。\n")
+    assert "$x_0$" not in html
+    assert "$x^*$" not in html
+    assert html.count("equation?tex=") == 2
+    assert 'eeimg="1"' in html
+    assert "<li>" in html
+
+
+def test_math_inside_inline_code_and_fence_stays_literal():
+    html = md_to_html("use `$x_0$` plus:\n\n```\n$$\nA = B\n$$\n```\n")
+    assert "<code>$x_0$</code>" in html
+    assert "equation?tex=" not in html
+    assert "$$" in html
+
+
+def test_text_then_display_math_not_merged():
+    html = md_to_html("前文\n$$\nE = mc^2\n$$\n后文\n")
+    assert html.index("前文") < html.index("equation?tex=") < html.index("后文")
+    assert "$$" not in html
+    assert "<p>前文</p>" in html
+    assert "<p>后文</p>" in html
