@@ -7,12 +7,16 @@ from zhihu_cli.config import (
     COOKIE_FILE,
     DEFAULT_TIMEOUT,
     DEFAULT_USER_AGENT,
+    MAX_PART_CHARS,
     REQUIRED_COOKIES,
+    WRITE_TIMEOUT,
+    WRITE_TIMEOUT_MAX,
     ZHIHU_API_V3,
     ZHIHU_API_V4,
     ZHIHU_BASE_URL,
     ZHIHU_LOGIN_URL,
     get_browser_headers,
+    timeout_for_write,
 )
 
 
@@ -41,6 +45,21 @@ class TestConfigConstants:
 
     def test_default_timeout_is_positive(self):
         assert DEFAULT_TIMEOUT > 0
+
+    def test_write_timeout_floor_exceeds_default(self):
+        connect, read = timeout_for_write("")
+        assert connect == DEFAULT_TIMEOUT
+        assert read == WRITE_TIMEOUT
+        assert read > DEFAULT_TIMEOUT
+
+    def test_write_timeout_scales_with_payload(self):
+        _, small = timeout_for_write("x")
+        _, large = timeout_for_write("x" * 2_000_000)
+        assert large > small
+        assert large <= WRITE_TIMEOUT_MAX
+
+    def test_max_part_chars_is_positive(self):
+        assert MAX_PART_CHARS > 0
 
     def test_default_headers_has_required_keys(self):
         headers = get_browser_headers()

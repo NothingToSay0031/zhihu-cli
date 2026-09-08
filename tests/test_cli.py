@@ -456,3 +456,74 @@ class TestImageOptions:
             assert result.exit_code == 0
             assert "art_img_1" in result.output
             mc.upload_image.assert_called_once()
+
+
+class TestPublishMdCommand:
+    def test_publish_md_single_part(self, runner, saved_cookies, tmp_path):
+        md = tmp_path / "hello.md"
+        md.write_text("# Hi\n\nbody\n", encoding="utf-8")
+        mc = _make_mock_client(create_article={"id": "art1"})
+        with patch(_CLIENT_PATCH, return_value=mc):
+            result = runner.invoke(cli, ["publish-md", str(md)])
+        assert result.exit_code == 0, result.output
+        assert "art1" in result.output
+        mc.create_article.assert_called_once()
+        title = mc.create_article.call_args.kwargs["title"]
+        assert title == "hello"
+        assert "Part" not in title
+
+    def test_publish_md_splits_large_file(
+        self, runner, saved_cookies, tmp_path, monkeypatch
+    ):
+        monkeypatch.setattr("zhihu_cli.config.MAX_PART_CHARS", 40)
+        md = tmp_path / "series.md"
+        md.write_text(
+            "# A\n\n" + ("a" * 30) + "\n# B\n\n" + ("b" * 30) + "\n",
+            encoding="utf-8",
+        )
+        mc = _make_mock_client()
+        mc.create_article.side_effect = [{"id": "p1"}, {"id": "p2"}]
+        with patch(_CLIENT_PATCH, return_value=mc):
+            result = runner.invoke(cli, ["publish-md", str(md)])
+        assert result.exit_code == 0, result.output
+        assert mc.create_article.call_count == 2
+        titles = [c.kwargs["title"] for c in mc.create_article.call_args_list]
+        assert titles == ["series（Part 1/2）", "series（Part 2/2）"]
+        assert "p1" in result.output and "p2" in result.output
+        published = json.loads(
+            (saved_cookies[0] / "published.json").read_text(encoding="utf-8")
+        )
+        rec = published[str(md)]
+        assert rec["article_id"] == "p1"
+        assert [p["article_id"] for p in rec["parts"]] == ["p1", "p2"]
+
+    def test_publish_md_skips_unchanged(self, runner, saved_cookies, tmp_path):
+        md = tmp_path / "hello.md"
+        md.write_text("# Hi\n\nbody\n", encoding="utf-8")
+        mc = _make_mock_client(create_article={"id": "art1"})
+        with patch(_CLIENT_PATCH, return_value=mc):
+            first = runner.invoke(cli, ["publish-md", str(md)])
+            second = runner.invoke(cli, ["publish-md", str(md)])
+        assert first.exit_code == 0, first.output
+        assert second.exit_code == 0, second.output
+        assert "Already published" in second.output
+        mc.create_article.assert_called_once()
+
+    def test_publish_md_no_split_keeps_one_article(
+        self, runner, saved_cookies, tmp_path, monkeypatch
+    ):
+        monkeypatch.setattr("zhihu_cli.config.MAX_PART_CHARS", 40)
+        md = tmp_path / "series.md"
+        md.write_text(
+            "# A\n\n" + ("a" * 30) + "\n# B\n\n" + ("b" * 30) + "\n",
+            encoding="utf-8",
+        )
+        mc = _make_mock_client(create_article={"id": "whole"})
+        with patch(_CLIENT_PATCH, return_value=mc):
+            result = runner.invoke(cli, ["publish-md", str(md), "--no-split"])
+        assert result.exit_code == 0, result.output
+        mc.create_article.assert_called_once()
+        title = mc.create_article.call_args.kwargs["title"]
+        assert title == "series"
+        assert "single article" in result.output
+

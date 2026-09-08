@@ -30,6 +30,26 @@ ZHIHU_OAUTH_CAPTCHA = f"{ZHIHU_API_V3}/oauth/captcha/v2?type=captcha_sign_in"
 
 # HTTP defaults
 DEFAULT_TIMEOUT = 15
+# Zhihu draft PATCH returns HTTP 554 on very large HTML (~1.7MB observed).
+MAX_PART_CHARS = 80_000
+MAX_PART_HTML_BYTES = 350_000
+ZHIHU_TITLE_MAX = 100
+# Article draft PATCH/PUT: Zhihu sanitizes the full HTML before responding.
+# A ~2MB body with thousands of formula images routinely exceeds 15s.
+WRITE_TIMEOUT = 60
+WRITE_TIMEOUT_MAX = 300
+WRITE_RETRY_COUNT = 2
+
+
+def timeout_for_write(content: str = "") -> tuple[float, float]:
+    """Return ``(connect, read)`` timeout seconds for article writes.
+
+    Read timeout scales with payload size so large Markdown articles do not
+    fail with ``Read timed out. (read timeout=15)`` on draft update.
+    """
+    nbytes = len(content.encode("utf-8")) if content else 0
+    read = min(WRITE_TIMEOUT_MAX, max(WRITE_TIMEOUT, nbytes / 10_000))
+    return (float(DEFAULT_TIMEOUT), float(read))
 
 # 全局统一 Chrome 版本号，UA / sec-ch-ua / sec-fetch-* 均从此派生，避免指纹矛盾
 CHROME_VERSION = "145"

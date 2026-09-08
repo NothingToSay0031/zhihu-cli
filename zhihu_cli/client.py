@@ -22,6 +22,7 @@ from PIL import Image
 
 from .config import (
     DEFAULT_TIMEOUT,
+    WRITE_RETRY_COUNT,
     ZHIHU_API_V4,
     ZHIHU_CONTENT_DRAFTS_URL,
     ZHIHU_CONTENT_PUBLISH_URL,
@@ -29,6 +30,7 @@ from .config import (
     ZHIHU_OSS_UPLOAD_URL,
     ZHIHU_ZHUANLAN_API,
     get_browser_headers,
+    timeout_for_write,
 )
 from .exceptions import DataFetchError, LoginError
 
@@ -551,10 +553,16 @@ class ZhihuClient:
     def _content_publish(self, payload: dict) -> dict:
         """Post to the unified content/publish endpoint."""
         headers = {"x-requested-with": "fetch"}
+        html = ""
+        data = payload.get("data")
+        if isinstance(data, dict):
+            hybrid = data.get("hybrid")
+            if isinstance(hybrid, dict):
+                html = hybrid.get("html") or ""
         try:
             resp = self._session.post(
                 ZHIHU_CONTENT_PUBLISH_URL, json=payload,
-                headers=headers, timeout=DEFAULT_TIMEOUT,
+                headers=headers, timeout=timeout_for_write(html),
             )
         except requests.RequestException as e:
             raise DataFetchError(f"Publish failed: {e}") from e
@@ -715,6 +723,37 @@ class ZhihuClient:
         }
         return self._content_publish(payload)
 
+    def _patch_article_draft(self, article_id: str, patch_data: dict) -> requests.Response:
+        """PATCH article draft, retrying on read timeout for large HTML bodies."""
+        url = f"{ZHIHU_ZHUANLAN_API}/articles/{article_id}/draft"
+        timeout = timeout_for_write(str(patch_data.get("content", "")))
+        attempts = WRITE_RETRY_COUNT + 1
+        last_exc: requests.RequestException | None = None
+        for attempt in range(attempts):
+            try:
+                return self._session.patch(url, json=patch_data, timeout=timeout)
+            except requests.Timeout as e:
+                last_exc = e
+                logger.warning(
+                    "Update article draft timed out (attempt %s/%s): %s",
+                    attempt + 1,
+                    attempts,
+                    e,
+                )
+                if attempt + 1 >= attempts:
+                    break
+                time.sleep(2 * (attempt + 1))
+        assert last_exc is not None
+        raise last_exc
+
+    def _publish_article(self, article_id: str, content: str = "") -> requests.Response:
+        """PUT to publish an article draft."""
+        return self._session.put(
+            f"{ZHIHU_ZHUANLAN_API}/articles/{article_id}/publish",
+            json={"column": None, "commentPermission": "anyone"},
+            timeout=timeout_for_write(content),
+        )
+
     # ===== Create Article (专栏文章) =====
 
     def create_article(self, title: str, content: str,
@@ -780,11 +819,7 @@ class ZhihuClient:
         if topic_ids:
             patch_data["topics"] = topic_ids
         try:
-            resp = self._session.patch(
-                f"{base}/articles/{draft_id}/draft",
-                json=patch_data,
-                timeout=DEFAULT_TIMEOUT,
-            )
+            resp = self._patch_article_draft(str(draft_id), patch_data)
         except requests.RequestException as e:
             raise DataFetchError(f"Update article draft failed: {e}") from e
         if resp.status_code not in (200, 204):
@@ -793,13 +828,8 @@ class ZhihuClient:
             )
 
         # Step 3: publish
-        publish_data = {"column": None, "commentPermission": "anyone"}
         try:
-            resp = self._session.put(
-                f"{base}/articles/{draft_id}/publish",
-                json=publish_data,
-                timeout=DEFAULT_TIMEOUT,
-            )
+            resp = self._publish_article(str(draft_id), content)
         except requests.RequestException as e:
             raise DataFetchError(f"Publish article failed: {e}") from e
         if resp.status_code == 401:
@@ -828,16 +858,11 @@ class ZhihuClient:
         PATCH /articles/{id}/draft with the new title/content, then
         PUT /articles/{id}/publish.
         """
-        base = ZHIHU_ZHUANLAN_API
         patch_data: dict[str, Any] = {"title": title, "content": content}
         if topic_ids:
             patch_data["topics"] = topic_ids
         try:
-            resp = self._session.patch(
-                f"{base}/articles/{article_id}/draft",
-                json=patch_data,
-                timeout=DEFAULT_TIMEOUT,
-            )
+            resp = self._patch_article_draft(article_id, patch_data)
         except requests.RequestException as e:
             raise DataFetchError(f"Update article draft failed: {e}") from e
         if resp.status_code == 401:
@@ -847,11 +872,7 @@ class ZhihuClient:
                 f"Update article draft failed ({resp.status_code}): {resp.text[:200]}"
             )
         try:
-            resp = self._session.put(
-                f"{base}/articles/{article_id}/publish",
-                json={"column": None, "commentPermission": "anyone"},
-                timeout=DEFAULT_TIMEOUT,
-            )
+            resp = self._publish_article(article_id, content)
         except requests.RequestException as e:
             raise DataFetchError(f"Publish article update failed: {e}") from e
         if resp.status_code == 401:

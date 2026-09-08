@@ -76,7 +76,7 @@ tags:
 | 关注问题 | `zhihu follow-question <id>`；取消 `zhihu follow-question <id> --unfollow` |
 | 发提问 | `zhihu ask "标题" [-d "描述"] [-t 话题id ...] [-i 图 ...]` |
 | 发想法 | `zhihu pin "标题" [-c "正文"] [-i 图 ...]` |
-| 发文章 | `zhihu article "标题" "正文" [-t 话题id ...] [-i 图 ...]` |
+| 发文章 | `zhihu article "标题" "正文" [-t 话题id ...] [-i 图 ...]`；Markdown：`zhihu publish-md 文章.md`（过长会自动切成 Part i/n；`--no-split` 整篇一次发送） |
 | 删提问/想法/文章 | `zhihu delete-question <id>` / `delete-pin <id>` / `delete-article <id>` [-y] |
 | 收藏 / 通知 | `zhihu collections [--limit N] [--json]`；`zhihu notifications [--limit N] [--offset M] [--json]` |
 | 退出 | `zhihu logout` |

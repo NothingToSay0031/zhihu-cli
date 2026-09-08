@@ -8,7 +8,7 @@ import pytest
 import requests
 
 from zhihu_cli.client import ZhihuClient
-from zhihu_cli.config import DEFAULT_TIMEOUT, ZHIHU_API_V4, ZHIHU_CONTENT_DRAFTS_URL, ZHIHU_CONTENT_PUBLISH_URL
+from zhihu_cli.config import DEFAULT_TIMEOUT, WRITE_TIMEOUT
 from zhihu_cli.exceptions import DataFetchError, LoginError
 
 
@@ -609,6 +609,49 @@ class TestCreateArticle:
             assert payload["data"]["title"]["title"] == "Title"
             assert "v2-xyz" in payload["data"]["hybrid"]["html"]
             assert payload["data"]["draft"]["id"] == "draft_a1"
+
+    def test_patch_uses_write_timeout(self, client):
+        draft_resp = _make_response(200, json_data={"id": "d1"})
+        patch_resp = _make_response(200)
+        publish_resp = _make_response(200, json_data={"id": "d1"})
+        body = "x" * 50_000
+        with patch.object(client._session, "post", return_value=draft_resp), \
+             patch.object(client._session, "patch", return_value=patch_resp) as mock_patch, \
+             patch.object(client._session, "put", return_value=publish_resp) as mock_put:
+            client.create_article("T", body)
+            patch_timeout = mock_patch.call_args.kwargs["timeout"]
+            put_timeout = mock_put.call_args.kwargs["timeout"]
+            assert patch_timeout[0] == DEFAULT_TIMEOUT
+            assert patch_timeout[1] >= WRITE_TIMEOUT
+            assert patch_timeout[1] > DEFAULT_TIMEOUT
+            assert put_timeout[1] >= WRITE_TIMEOUT
+
+    def test_patch_retries_on_read_timeout(self, client):
+        draft_resp = _make_response(200, json_data={"id": "d1"})
+        patch_resp = _make_response(200)
+        publish_resp = _make_response(200, json_data={"id": "d1"})
+        with patch.object(client._session, "post", return_value=draft_resp), \
+             patch.object(
+                 client._session, "patch",
+                 side_effect=[requests.ReadTimeout("read timeout=15"), patch_resp],
+             ) as mock_patch, \
+             patch.object(client._session, "put", return_value=publish_resp), \
+             patch("zhihu_cli.client.time.sleep") as mock_sleep:
+            result = client.create_article("T", "C")
+            assert result["id"] == "d1"
+            assert mock_patch.call_count == 2
+            mock_sleep.assert_called_once()
+
+    def test_patch_timeout_exhausted_raises(self, client):
+        draft_resp = _make_response(200, json_data={"id": "d1"})
+        with patch.object(client._session, "post", return_value=draft_resp), \
+             patch.object(
+                 client._session, "patch",
+                 side_effect=requests.ReadTimeout("read timeout=15"),
+             ), \
+             patch("zhihu_cli.client.time.sleep"):
+            with pytest.raises(DataFetchError, match="Update article draft failed"):
+                client.create_article("T", "C")
 
 
 # ── upload_image ────────────────────────────────────────────────────────────────

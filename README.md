@@ -212,6 +212,7 @@ zhihu publish-dir ./articles --recursive --pattern "*.md"
 zhihu publish-dir ./articles --dry-run    # 仅预览将要发布的内容
 zhihu publish-dir ./articles --force      # 忽略已发布状态，全部重新发布（会创建新文章）
 zhihu publish-md 文章.md --force          # 修改后的文件重新发布
+zhihu publish-md 文章.md --no-split       # 强制整篇一次发送，不切成 Part（知乎可能拒绝超长草稿）
 
 # 原地更新已发布的文章（文章 ID 与链接保持不变）
 zhihu update-md 文章.md --article-id <文章ID>
@@ -225,7 +226,7 @@ zhihu delete-article <文章ID>
 zhihu delete-question 12345678 -y
 ```
 
-> **Markdown 发布说明**：`publish-md` / `publish-dir` 将 Markdown 转换为知乎富文本 HTML。文章标题取自**文件名**（而非文内标题，避免代码块中的 `#` 行被误判）；表格使用知乎编辑器格式（`data-draft-node="block" data-draft-type="table"`），引用块/列表转换为知乎原生结构（引用可嵌入列表项），代码块使用 `<pre lang>`，文中本地图片（相对路径）会自动上传到知乎。
+> **Markdown 发布说明**：`publish-md` / `publish-dir` 将 Markdown 转换为知乎富文本 HTML。文章标题取自**文件名**（而非文内标题，避免代码块中的 `#` 行被误判）；表格使用知乎编辑器格式（`data-draft-node="block" data-draft-type="table"`），引用块/列表转换为知乎原生结构（引用可嵌入列表项），代码块使用 `<pre lang>`，文中本地图片（相对路径）会自动上传到知乎。单文件过长时（约超过 8 万字，或转换后 HTML 过大）会按标题自动切成多篇 `（Part i/n）` 发布，避免知乎草稿接口超时或返回 554。需要整篇一次发送时加 `--no-split`（现有 `--force` 只表示忽略“未改动则跳过”，仍会切分）。
 
 ### 其他
 
