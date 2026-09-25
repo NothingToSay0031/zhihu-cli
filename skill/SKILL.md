@@ -77,6 +77,7 @@ tags:
 | 发提问 | `zhihu ask "标题" [-d "描述"] [-t 话题id ...] [-i 图 ...]` |
 | 发想法 | `zhihu pin "标题" [-c "正文"] [-i 图 ...]` |
 | 发文章 | `zhihu article "标题" "正文" [-t 话题id ...] [-i 图 ...]`；Markdown：`zhihu publish-md 文章.md`（过长会自动切成 Part i/n；`--no-split` 整篇一次发送） |
+| 原地更新已发文章 | `zhihu update-md 文章.md [--article-id <ID> ...]`：默认复用 `published.json` 记录的每一篇 Part ID 逐篇更新；篇数变多则新建，变少则确认后删除多出的尾部（`--keep-extra` 保留、`-y` 免确认）；文件换了目录会按文件名找回原记录，不会重复发一套系列 |
 | 删提问/想法/文章 | `zhihu delete-question <id>` / `delete-pin <id>` / `delete-article <id>` [-y] |
 | 收藏 / 通知 | `zhihu collections [--limit N] [--json]`；`zhihu notifications [--limit N] [--offset M] [--json]` |
 | 退出 | `zhihu logout` |

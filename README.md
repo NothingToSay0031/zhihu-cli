@@ -215,7 +215,10 @@ zhihu publish-md 文章.md --force          # 修改后的文件重新发布
 zhihu publish-md 文章.md --no-split       # 强制整篇一次发送，不切成 Part（知乎可能拒绝超长草稿）
 
 # 原地更新已发布的文章（文章 ID 与链接保持不变）
-zhihu update-md 文章.md --article-id <文章ID>
+zhihu update-md 文章.md                     # 复用 published.json 记录的各 Part ID，逐篇原地更新
+zhihu update-md 文章.md --article-id <ID> --article-id <ID2>   # 手动按 Part 顺序指定 ID
+zhihu update-md 文章.md --no-split -y       # 整篇合并到第一篇，删除多余的尾部 Part
+zhihu update-md 文章.md --keep-extra        # 切分篇数变少时保留旧的尾部文章
 zhihu publish-dir ./articles --update     # 已发布过的文件原地更新，新文件正常发布
 zhihu publish-dir ./articles --update --dry-run   # 预览：哪些更新、哪些新建
 
@@ -227,6 +230,8 @@ zhihu delete-question 12345678 -y
 ```
 
 > **Markdown 发布说明**：`publish-md` / `publish-dir` 将 Markdown 转换为知乎富文本 HTML。文章标题取自**文件名**（而非文内标题，避免代码块中的 `#` 行被误判）；表格使用知乎编辑器格式（`data-draft-node="block" data-draft-type="table"`），引用块/列表转换为知乎原生结构（引用可嵌入列表项），代码块使用 `<pre lang>`，文中本地图片（相对路径）会自动上传到知乎。单文件过长时（约超过 8 万字，或转换后 HTML 过大）会按标题自动切成多篇 `（Part i/n）` 发布，避免知乎草稿接口超时或返回 554。需要整篇一次发送时加 `--no-split`（现有 `--force` 只表示忽略“未改动则跳过”，仍会切分）。
+>
+> **update-md 的 Part 对账**：更新时按顺序复用 `published.json` 中记录的每一篇 ID（或 `--article-id` 传入的 ID）。切分篇数相同则全部原地更新；篇数变多则新建尾部文章；篇数变少则先确认再删除多出的尾部文章（`--keep-extra` 保留、`-y` 免确认），删除只发生在所有文章写入成功之后。文件换了目录也能按文件名找回原记录并迁移状态键，不会重复发一套系列。
 
 ### 其他
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -526,4 +527,175 @@ class TestPublishMdCommand:
         title = mc.create_article.call_args.kwargs["title"]
         assert title == "series"
         assert "single article" in result.output
+
+
+# ── update-md command ──────────────────────────────────────────────────────────
+
+
+def _two_part_md(md):
+    md.write_text("# A\n\n" + ("a" * 30) + "\n# B\n\n" + ("b" * 30) + "\n", encoding="utf-8")
+
+
+def _seed_published(config_dir, key: str, ids: list[str]) -> None:
+    """Write a publish record for ``key`` covering one article per ID."""
+    base = Path(key).stem
+    parts = [
+        {"title": f"{base}（Part {i}/{len(ids)}）", "article_id": aid}
+        for i, aid in enumerate(ids, 1)
+    ]
+    record = {"sha256": "old", "article_id": ids[0], "title": base, "parts": parts}
+    (config_dir / "published.json").write_text(
+        json.dumps({key: record}, ensure_ascii=False), encoding="utf-8"
+    )
+
+
+class TestUpdateMdCommand:
+    def test_update_md_updates_every_part(
+        self, runner, saved_cookies, tmp_path, monkeypatch
+    ):
+        monkeypatch.setattr("zhihu_cli.config.MAX_PART_CHARS", 40)
+        md = tmp_path / "series.md"
+        _two_part_md(md)
+        _seed_published(saved_cookies[0], str(md), ["p1", "p2"])
+        mc = _make_mock_client(update_article={}, delete_article=True)
+        with patch(_CLIENT_PATCH, return_value=mc):
+            result = runner.invoke(cli, ["update-md", str(md)])
+        assert result.exit_code == 0, result.output
+        mc.create_article.assert_not_called()
+        ids = [c.kwargs["article_id"] for c in mc.update_article.call_args_list]
+        assert ids == ["p1", "p2"]
+        mc.delete_article.assert_not_called()
+
+    def test_update_md_creates_new_parts(
+        self, runner, saved_cookies, tmp_path, monkeypatch
+    ):
+        monkeypatch.setattr("zhihu_cli.config.MAX_PART_CHARS", 40)
+        md = tmp_path / "series.md"
+        _two_part_md(md)
+        _seed_published(saved_cookies[0], str(md), ["p1"])
+        mc = _make_mock_client(update_article={}, delete_article=True)
+        mc.create_article.side_effect = [{"id": "new2"}]
+        with patch(_CLIENT_PATCH, return_value=mc):
+            result = runner.invoke(cli, ["update-md", str(md)])
+        assert result.exit_code == 0, result.output
+        assert mc.update_article.call_count == 1
+        mc.create_article.assert_called_once()
+        assert "new2" in result.output
+
+    def test_update_md_deletes_surplus_parts(
+        self, runner, saved_cookies, tmp_path, monkeypatch
+    ):
+        monkeypatch.setattr("zhihu_cli.config.MAX_PART_CHARS", 40)
+        md = tmp_path / "series.md"
+        md.write_text("# A\n\nsmall\n", encoding="utf-8")
+        _seed_published(saved_cookies[0], str(md), ["p1", "p2", "p3"])
+        mc = _make_mock_client(update_article={}, delete_article=True)
+        with patch(_CLIENT_PATCH, return_value=mc):
+            result = runner.invoke(cli, ["update-md", str(md), "-y"])
+        assert result.exit_code == 0, result.output
+        mc.update_article.assert_called_once()
+        deleted = [c.args[0] for c in mc.delete_article.call_args_list]
+        assert deleted == ["p2", "p3"]
+
+    def test_update_md_keeps_surplus_when_declined(
+        self, runner, saved_cookies, tmp_path
+    ):
+        md = tmp_path / "series.md"
+        md.write_text("# A\n\nsmall\n", encoding="utf-8")
+        _seed_published(saved_cookies[0], str(md), ["p1", "p2"])
+        mc = _make_mock_client(update_article={}, delete_article=True)
+        with patch(_CLIENT_PATCH, return_value=mc):
+            result = runner.invoke(cli, ["update-md", str(md)], input="n\n")
+        assert result.exit_code != 0
+        mc.update_article.assert_not_called()
+        mc.delete_article.assert_not_called()
+
+    def test_update_md_keep_extra_leaves_tail(
+        self, runner, saved_cookies, tmp_path
+    ):
+        md = tmp_path / "series.md"
+        md.write_text("# A\n\nsmall\n", encoding="utf-8")
+        _seed_published(saved_cookies[0], str(md), ["p1", "p2"])
+        mc = _make_mock_client(update_article={}, delete_article=True)
+        with patch(_CLIENT_PATCH, return_value=mc):
+            result = runner.invoke(cli, ["update-md", str(md), "--keep-extra"])
+        assert result.exit_code == 0, result.output
+        mc.delete_article.assert_not_called()
+
+    def test_update_md_collapses_series_with_no_split(
+        self, runner, saved_cookies, tmp_path, monkeypatch
+    ):
+        monkeypatch.setattr("zhihu_cli.config.MAX_PART_CHARS", 40)
+        md = tmp_path / "series.md"
+        _two_part_md(md)
+        _seed_published(saved_cookies[0], str(md), ["p1", "p2", "p3"])
+        mc = _make_mock_client(update_article={}, delete_article=True)
+        with patch(_CLIENT_PATCH, return_value=mc):
+            result = runner.invoke(cli, ["update-md", str(md), "--no-split", "-y"])
+        assert result.exit_code == 0, result.output
+        mc.update_article.assert_called_once()
+        assert mc.update_article.call_args.kwargs["title"] == "series"
+        deleted = [c.args[0] for c in mc.delete_article.call_args_list]
+        assert deleted == ["p2", "p3"]
+
+    def test_update_md_accepts_repeated_article_ids(
+        self, runner, saved_cookies, tmp_path, monkeypatch
+    ):
+        monkeypatch.setattr("zhihu_cli.config.MAX_PART_CHARS", 40)
+        md = tmp_path / "series.md"
+        _two_part_md(md)
+        mc = _make_mock_client(update_article={}, delete_article=True)
+        with patch(_CLIENT_PATCH, return_value=mc):
+            result = runner.invoke(
+                cli, ["update-md", str(md), "--article-id", "x1", "--article-id", "x2"]
+            )
+        assert result.exit_code == 0, result.output
+        ids = [c.kwargs["article_id"] for c in mc.update_article.call_args_list]
+        assert ids == ["x1", "x2"]
+
+    def test_update_md_finds_record_after_folder_move(
+        self, runner, saved_cookies, tmp_path, monkeypatch
+    ):
+        """A moved file must update the old series instead of duplicating it."""
+        monkeypatch.setattr("zhihu_cli.config.MAX_PART_CHARS", 40)
+        md = tmp_path / "new_folder" / "series.md"
+        md.parent.mkdir()
+        _two_part_md(md)
+        _seed_published(saved_cookies[0], str(tmp_path / "old_folder" / "series.md"), ["p1", "p2"])
+        mc = _make_mock_client(update_article={}, delete_article=True)
+        with patch(_CLIENT_PATCH, return_value=mc):
+            result = runner.invoke(cli, ["update-md", str(md)])
+        assert result.exit_code == 0, result.output
+        assert "同名记录" in result.output
+        ids = [c.kwargs["article_id"] for c in mc.update_article.call_args_list]
+        assert ids == ["p1", "p2"]
+        published = json.loads(
+            (saved_cookies[0] / "published.json").read_text(encoding="utf-8")
+        )
+        assert list(published) == [str(md)]
+
+    def test_update_md_without_record_needs_id(self, runner, saved_cookies, tmp_path):
+        md = tmp_path / "brand-new.md"
+        md.write_text("# A\n\nbody\n", encoding="utf-8")
+        mc = _make_mock_client(update_article={})
+        with patch(_CLIENT_PATCH, return_value=mc):
+            result = runner.invoke(cli, ["update-md", str(md)])
+        assert result.exit_code == 1
+        assert "--article-id" in result.output
+        mc.update_article.assert_not_called()
+
+
+class TestPublishMdDuplicateGuard:
+    def test_publish_md_warns_about_same_stem_record(
+        self, runner, saved_cookies, tmp_path
+    ):
+        md = tmp_path / "moved" / "series.md"
+        md.parent.mkdir()
+        md.write_text("# A\n\nbody\n", encoding="utf-8")
+        _seed_published(saved_cookies[0], str(tmp_path / "origin" / "series.md"), ["p1"])
+        mc = _make_mock_client(create_article={"id": "art1"})
+        with patch(_CLIENT_PATCH, return_value=mc):
+            result = runner.invoke(cli, ["publish-md", str(md)])
+        assert result.exit_code == 0, result.output
+        assert "update-md" in result.output
 

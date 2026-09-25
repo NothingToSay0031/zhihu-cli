@@ -74,6 +74,27 @@ def _record(base_title: str, results: list[tuple[str, str]], sha256: str) -> dic
     }
 
 
+def _find_record(published: dict, md_path: Path) -> tuple[str, dict | None]:
+    """Return ``(key, state)`` for a file: exact path, else a unique same-stem record.
+
+    A moved or renamed folder must not silently turn an update into a duplicate
+    series, so a record whose title matches the file stem counts as the same work.
+    An ambiguous match (several files with the same stem) returns no state.
+    """
+    key = str(md_path)
+    state = published.get(key)
+    if state:
+        return key, state
+    candidates = [
+        (k, v)
+        for k, v in published.items()
+        if (v.get("title") or Path(k).stem) == md_path.stem
+    ]
+    if len(candidates) == 1:
+        return candidates[0]
+    return key, None
+
+
 def _print_part_urls(results: list[tuple[str, str]], *, success: bool = False) -> None:
     printer = print_success if success else print_hint
     for i, (title, article_id) in enumerate(results, 1):
@@ -141,6 +162,44 @@ def _warn_large_html(html: str) -> None:
         )
 
 
+def _upsert_part(
+    client,
+    base_title: str,
+    image_map: dict[str, dict],
+    part_md: str,
+    index: int,
+    total: int,
+    topics: list[str],
+    existing_ids: list[str],
+) -> tuple[str, str]:
+    """Write one part: update the recorded article at ``index``, else create it."""
+    title = part_title(base_title, index, total)
+    html = md_to_html(series_lead(base_title, index, total) + part_md, image_map)
+    _warn_large_html(html)
+    print_info(f"  Part {index}/{total}: {title}")
+    if index <= len(existing_ids) and existing_ids[index - 1]:
+        article_id = existing_ids[index - 1]
+        client.update_article(
+            article_id=article_id,
+            title=title,
+            content=html,
+            topic_ids=list(topics) if topics else None,
+        )
+    else:
+        article_id = _create_one(client, title, html, topics)
+    return title, article_id
+
+
+def _announce(n: int, no_split: bool) -> None:
+    if no_split:
+        print_warning(
+            "Publishing as a single article (--no-split); "
+            "Zhihu may reject very large drafts"
+        )
+    elif n > 1:
+        print_info(f"Splitting into {n} parts")
+
+
 def _publish_parts(
     client,
     md_path: Path,
@@ -158,35 +217,71 @@ def _publish_parts(
     """
     base_title, image_map, parts = _prepare_parts(client, md_path, no_split=no_split)
     n = len(parts)
-    if no_split:
-        print_warning(
-            "Publishing as a single article (--no-split); "
-            "Zhihu may reject very large drafts"
-        )
-    elif n > 1:
-        print_info(f"Splitting into {n} parts")
+    _announce(n, no_split)
     results: list[tuple[str, str]] = []
     for i, part_md in enumerate(parts, 1):
-        title = part_title(base_title, i, n)
-        html = md_to_html(series_lead(base_title, i, n) + part_md, image_map)
-        _warn_large_html(html)
-        print_info(f"  Part {i}/{n}: {title}")
-        if i <= len(existing_ids) and existing_ids[i - 1]:
-            article_id = existing_ids[i - 1]
-            client.update_article(
-                article_id=article_id,
-                title=title,
-                content=html,
-                topic_ids=list(topics) if topics else None,
+        results.append(
+            _upsert_part(
+                client, base_title, image_map, part_md, i, n, topics, existing_ids
             )
-        else:
-            article_id = _create_one(client, title, html, topics)
-        results.append((title, article_id))
+        )
         if progress_key is not None:
             published = _load_published()
             published[progress_key] = _record(base_title, results, sha256="")
             _save_published(published)
     return base_title, results
+
+
+def reconcile_markdown(
+    client,
+    md_path: Path,
+    existing_ids: list[str],
+    topics: list[str],
+    *,
+    no_split: bool = False,
+    prune_extra: bool = True,
+    assume_yes: bool = False,
+) -> tuple[str, list[tuple[str, str]], list[str], int]:
+    """Update a series from markdown, keeping the part count in sync with the file.
+
+    Recorded IDs are reused in order, new parts are created, and tail articles
+    left over by a shorter split are deleted when ``prune_extra`` is set. Deletion
+    happens only after every part is written, so a mid-series failure cannot
+    destroy the tail of the previous version.
+    """
+    base_title, image_map, parts = _prepare_parts(client, md_path, no_split=no_split)
+    n = len(parts)
+    _announce(n, no_split)
+    surplus = existing_ids[n:]
+    if surplus:
+        if not prune_extra:
+            print_warning(
+                f"新的切分只有 {n} 篇，保留原有的 {len(surplus)} 篇尾部文章（--keep-extra）"
+            )
+        else:
+            print_warning(
+                f"新的切分只有 {n} 篇，原系列多出 {len(surplus)} 篇尾部文章"
+            )
+            if not assume_yes:
+                click.confirm("删除多出的文章？此操作不可撤销", abort=True)
+    results: list[tuple[str, str]] = []
+    created = 0
+    for i, part_md in enumerate(parts, 1):
+        if not (i <= len(existing_ids) and existing_ids[i - 1]):
+            created += 1
+        results.append(
+            _upsert_part(
+                client, base_title, image_map, part_md, i, n, topics, existing_ids
+            )
+        )
+    deleted: list[str] = []
+    if prune_extra:
+        for article_id in surplus:
+            if client.delete_article(article_id):
+                deleted.append(article_id)
+            else:
+                print_warning(f"未能删除多余文章 {article_id}")
+    return base_title, results, deleted, created
 
 
 def publish_markdown(
@@ -230,6 +325,14 @@ def publish_md(file: Path, topics: tuple[str, ...], force: bool, no_split: bool)
         else:
             print_hint(f"  https://zhuanlan.zhihu.com/p/{state.get('article_id')}")
         return
+    if not state:
+        matched_key, matched = _find_record(published, file)
+        if matched:
+            print_warning(
+                f"同名文章已从 {matched_key} 发布过"
+                f"（{len(_part_ids(matched))} 篇）；原地更新请用 "
+                "[bold]zhihu update-md[/bold]"
+            )
     reuse: list[str] = []
     if not force and state and not state.get("sha256"):
         reuse = _part_ids(state)
@@ -365,53 +468,105 @@ def publish_dir(
 def update_markdown(
     client,
     md_path: Path,
-    article_id: str,
+    article_ids: list[str],
     topics: list[str],
     *,
     no_split: bool = False,
-) -> tuple[str, list[tuple[str, str]]]:
-    """Update an article from markdown. Extra parts are published as new articles."""
-    return _publish_parts(
+    prune_extra: bool = True,
+    assume_yes: bool = False,
+) -> tuple[str, list[tuple[str, str]], list[str], int]:
+    """Update a series from markdown, reusing ``article_ids`` in part order."""
+    return reconcile_markdown(
         client,
         md_path,
+        article_ids,
         topics,
-        [article_id] if article_id else [],
         no_split=no_split,
+        prune_extra=prune_extra,
+        assume_yes=assume_yes,
     )
 
 
 @click.command("update-md")
 @click.argument("file", type=click.Path(exists=True, dir_okay=False, path_type=Path))
-@click.option("--article-id", required=True, help="ID of the existing article to update")
+@click.option(
+    "--article-id",
+    "article_ids",
+    multiple=True,
+    help="Existing part article IDs in part order (repeatable). "
+    "Defaults to the IDs recorded for this file.",
+)
 @click.option("-t", "--topic", "topics", multiple=True, help="Topic ID (repeatable)")
 @click.option(
     "--no-split",
     is_flag=True,
     help="Do not split a large file; update as one article (may fail on Zhihu)",
 )
+@click.option(
+    "--keep-extra",
+    is_flag=True,
+    help="Keep tail articles when the new split has fewer parts than before",
+)
+@click.option(
+    "-y", "--yes", is_flag=True, help="Do not ask before deleting surplus tail articles"
+)
 def update_md(
-    file: Path, article_id: str, topics: tuple[str, ...], no_split: bool
+    file: Path,
+    article_ids: tuple[str, ...],
+    topics: tuple[str, ...],
+    no_split: bool,
+    keep_extra: bool,
+    yes: bool,
 ):
     """Update an existing article from a markdown file, keeping its ID (原地更新文章)."""
+    published = _load_published()
+    key, state = _find_record(published, file)
+    existing = list(article_ids) or _part_ids(state)
+    if not existing:
+        print_error(
+            "找不到已发布记录 - 用 [bold]--article-id[/bold] 指定原文章 ID"
+            f"（当前标题：{file.stem}）"
+        )
+        sys.exit(1)
+    if key != str(file):
+        print_info(f"复用同名记录：{key}（{len(existing)} 篇）")
+    else:
+        print_info(f"复用已记录的文章：{len(existing)} 篇")
     try:
         with _get_client() as client:
-            title, results = update_markdown(
-                client, file, article_id, list(topics), no_split=no_split
+            title, results, deleted, created = update_markdown(
+                client,
+                file,
+                existing,
+                list(topics),
+                no_split=no_split,
+                prune_extra=not keep_extra,
+                assume_yes=yes,
             )
         published = _load_published()
         published[str(file)] = _record(title, results, _file_hash(file))
+        if key != str(file):
+            published.pop(key, None)
         _save_published(published)
+        summary = f"更新 {len(results)} 篇"
+        if created:
+            summary += f"，新增 {created} 篇"
+        if deleted:
+            summary += f"，删除 {len(deleted)} 篇"
         if len(results) == 1:
             print_success(
-                f"Article updated!  [bold]{results[0][0]}[/bold]\n"
+                f"{summary}  {results[0][0]}\n"
                 f"  ID: [bold]{results[0][1]}[/bold]\n"
                 f"  https://zhuanlan.zhihu.com/p/{results[0][1]}"
             )
         else:
-            print_success(
-                f"Updated/published {len(results)} parts of [bold]{title}[/bold]"
-            )
+            print_success(f"{summary} of [bold]{title}[/bold]")
             _print_part_urls(results, success=True)
+        for article_id in deleted:
+            print_hint(f"  已删除多余文章 {article_id}")
+    except click.Abort:
+        print_hint("已取消，未改动任何文章")
+        sys.exit(1)
     except Exception as e:
         print_error(f"Failed to update article: {e}")
         sys.exit(1)
