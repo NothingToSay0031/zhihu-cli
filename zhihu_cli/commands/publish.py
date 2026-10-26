@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sys
+import time
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -105,13 +106,45 @@ def _print_part_urls(results: list[tuple[str, str]], *, success: bool = False) -
 
 
 def _upload_images(client, text: str, base_dir: Path) -> dict[str, dict]:
+    """Upload local images, trying each one up to IMAGE_UPLOAD_ATTEMPTS times.
+
+    A failed image is replaced by its alt text and the article is still written.
+    Re-running the command retries the images that were left out.
+    """
+    images = extract_local_images(text, base_dir)
     image_map: dict[str, dict] = {}
-    for ref, img_path in extract_local_images(text, base_dir).items():
-        try:
-            image_map[ref] = client.upload_image(str(img_path), source="article")
-            print_info(f"  Uploaded image: {img_path.name}")
-        except Exception as e:
-            print_warning(f"  Image upload failed ({img_path.name}): {e}")
+    failures: list[tuple[str, str]] = []
+    total = len(images)
+    for index, (ref, img_path) in enumerate(images.items(), 1):
+        print_info(f"  Uploading image {index}/{total}: {img_path.name}")
+        last_error = ""
+        for attempt in range(1, config.IMAGE_UPLOAD_ATTEMPTS + 1):
+            try:
+                image_map[ref] = client.upload_image(str(img_path), source="article")
+                print_info(f"  Uploaded image: {img_path.name}")
+                break
+            except Exception as e:
+                last_error = str(e)
+                if attempt < config.IMAGE_UPLOAD_ATTEMPTS:
+                    delay = config.IMAGE_RETRY_BACKOFF * (2 ** (attempt - 1))
+                    print_warning(
+                        f"  Image upload failed ({img_path.name}), "
+                        f"attempt {attempt}/{config.IMAGE_UPLOAD_ATTEMPTS}, "
+                        f"retrying in {delay:.0f}s: {e}"
+                    )
+                    time.sleep(delay)
+        else:
+            failures.append((img_path.name, last_error))
+            print_warning(
+                f"  Image upload failed after {config.IMAGE_UPLOAD_ATTEMPTS} "
+                f"attempts ({img_path.name}); leaving it out: {last_error}"
+            )
+    if failures:
+        names = ", ".join(name for name, _ in failures)
+        print_warning(
+            f"  {len(failures)} image(s) left out ({names}); "
+            "the article will still be updated. Re-run the command to retry."
+        )
     return image_map
 
 

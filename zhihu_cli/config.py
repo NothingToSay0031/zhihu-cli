@@ -40,6 +40,15 @@ WRITE_TIMEOUT = 60
 WRITE_TIMEOUT_MAX = 300
 WRITE_RETRY_COUNT = 2
 
+# Image processing on Zhihu's side can take far longer than 30s at peak times.
+# Poll for up to two minutes before giving up.
+IMAGE_POLL_ATTEMPTS = 60
+IMAGE_POLL_INTERVAL = 2.0
+# Try each image three times. If it still fails, leave that image out and keep
+# writing the article so one bad image cannot block the whole update.
+IMAGE_UPLOAD_ATTEMPTS = 3
+IMAGE_RETRY_BACKOFF = 2.0
+
 
 def timeout_for_write(content: str = "") -> tuple[float, float]:
     """Return ``(connect, read)`` timeout seconds for article writes.

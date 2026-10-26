@@ -22,6 +22,8 @@ from PIL import Image
 
 from .config import (
     DEFAULT_TIMEOUT,
+    IMAGE_POLL_ATTEMPTS,
+    IMAGE_POLL_INTERVAL,
     WRITE_RETRY_COUNT,
     ZHIHU_API_V4,
     ZHIHU_CONTENT_DRAFTS_URL,
@@ -481,8 +483,9 @@ class ZhihuClient:
                 f"OSS upload failed ({resp.status_code}): {resp.text[:200]}"
             )
 
-    def _poll_image(self, image_id: str, max_attempts: int = 15,
-                    interval: float = 2.0) -> dict:
+    def _poll_image(self, image_id: str,
+                    max_attempts: int = IMAGE_POLL_ATTEMPTS,
+                    interval: float = IMAGE_POLL_INTERVAL) -> dict:
         """Poll image status until processing completes."""
         import time
         for _ in range(max_attempts):
@@ -505,7 +508,10 @@ class ZhihuClient:
                     "watermark_src": data.get("watermark_src", ""),
                 }
             time.sleep(interval)
-        raise DataFetchError("Image processing timed out")
+        waited = max_attempts * interval
+        raise DataFetchError(
+            f"Image processing timed out after {waited:.0f}s (image_id={image_id})"
+        )
 
     # ===== Helpers =====
 

@@ -528,6 +528,90 @@ class TestPublishMdCommand:
         assert title == "series"
         assert "single article" in result.output
 
+    _IMAGE_INFO = {
+        "src": "https://pic-private.zhihu.com/v2-fig~q75.png?auth=x",
+        "original_src": "https://pic-private.zhihu.com/v2-fig~q75.png?auth=y",
+        "watermark": "watermark",
+        "watermark_src": "",
+    }
+
+    def _image_md(self, tmp_path):
+        img = tmp_path / "fig.png"
+        img.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 40)
+        md = tmp_path / "with-image.md"
+        md.write_text("# Hi\n\n![fig](fig.png)\n", encoding="utf-8")
+        return md
+
+    def _two_image_md(self, tmp_path):
+        for name in ("fig1.png", "fig2.png"):
+            (tmp_path / name).write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 40)
+        md = tmp_path / "with-two-images.md"
+        md.write_text(
+            "# Hi\n\n![first](fig1.png)\n\n![second](fig2.png)\n",
+            encoding="utf-8",
+        )
+        return md
+
+    def test_publish_md_retries_failed_image(
+        self, runner, saved_cookies, tmp_path
+    ):
+        md = self._image_md(tmp_path)
+        mc = _make_mock_client(create_article={"id": "art_img"})
+        mc.upload_image.side_effect = [
+            RuntimeError("Image processing timed out"),
+            RuntimeError("Image processing timed out"),
+            self._IMAGE_INFO,
+        ]
+        with patch(_CLIENT_PATCH, return_value=mc), \
+             patch("zhihu_cli.commands.publish.time.sleep") as mock_sleep:
+            result = runner.invoke(cli, ["publish-md", str(md), "--no-split"])
+        assert result.exit_code == 0, result.output
+        assert mc.upload_image.call_count == 3
+        assert mock_sleep.call_count == 2
+        mc.create_article.assert_called_once()
+        content = mc.create_article.call_args.kwargs["content"]
+        assert self._IMAGE_INFO["src"] in content
+
+    def test_publish_md_leaves_out_failed_image_and_continues(
+        self, runner, saved_cookies, tmp_path
+    ):
+        md = self._two_image_md(tmp_path)
+        mc = _make_mock_client(create_article={"id": "art_img"})
+        mc.upload_image.side_effect = [RuntimeError("boom")] * 3 + [
+            self._IMAGE_INFO
+        ]
+        with patch(_CLIENT_PATCH, return_value=mc), \
+             patch("zhihu_cli.commands.publish.time.sleep") as mock_sleep:
+            result = runner.invoke(cli, ["publish-md", str(md), "--no-split"])
+        assert result.exit_code == 0, result.output
+        called = [Path(call.args[0]).name for call in mc.upload_image.call_args_list]
+        assert called == ["fig1.png", "fig1.png", "fig1.png", "fig2.png"]
+        assert mock_sleep.call_count == 2
+        mc.create_article.assert_called_once()
+        content = mc.create_article.call_args.kwargs["content"]
+        assert self._IMAGE_INFO["src"] in content
+        assert content.count("<img") == 1
+        assert "left out" in result.output
+        assert "fig1.png" in result.output
+        assert "still be updated" in result.output
+
+    def test_publish_md_updates_when_all_images_fail(
+        self, runner, saved_cookies, tmp_path
+    ):
+        md = self._image_md(tmp_path)
+        mc = _make_mock_client(create_article={"id": "art_img"})
+        mc.upload_image.side_effect = RuntimeError("boom")
+        with patch(_CLIENT_PATCH, return_value=mc), \
+             patch("zhihu_cli.commands.publish.time.sleep"):
+            result = runner.invoke(cli, ["publish-md", str(md), "--no-split"])
+        assert result.exit_code == 0, result.output
+        assert mc.upload_image.call_count == 3
+        mc.create_article.assert_called_once()
+        content = mc.create_article.call_args.kwargs["content"]
+        assert "<img" not in content
+        assert "fig" in content
+        assert "still be updated" in result.output
+
 
 # ── update-md command ──────────────────────────────────────────────────────────
 
