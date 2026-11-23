@@ -228,6 +228,12 @@ def _emit_list(
                 i = _emit_list(sub, lines, i, n, ordered, image_map)
                 nested.append("".join(sub))
                 continue
+            if indent < base_indent:
+                # Indentation decreased: this item belongs to an ancestor
+                # list. Return it to the parent so it is not absorbed into
+                # the current (nested) list's <li>. Without this, a sibling
+                # of the parent item is wrongly swallowed by the sublist.
+                break
             flush_li()
             segments.append(("text", m.group(1).strip()))
             i += 1

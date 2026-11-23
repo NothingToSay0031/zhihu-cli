@@ -69,6 +69,35 @@ def test_nested_list_in_unordered_list():
     assert html.index("</ol>") < html.index("<li>c</li>")
 
 
+def test_sibling_after_same_type_sublist_is_not_absorbed():
+    """A top-level sibling after a nested ul must stay in the outer list."""
+    md = "- parent:\n  - sub1\n  - sub2\n- sibling1\n- sibling2\n"
+    html = md_to_html(md)
+    assert html.count("<ul>") == 2  # outer + nested
+    assert html.count("<li>") == 5
+    nested = html.index("<ul>", html.index("<ul>") + 1)
+    nested_end = html.index("</ul>", nested)
+    # Siblings must appear after the nested sublist closes, not inside it.
+    assert nested_end < html.index("<li>sibling1</li>")
+    assert nested_end < html.index("<li>sibling2</li>")
+
+
+def test_deep_same_type_sublists_then_return_to_top():
+    md = (
+        "- topA\n"
+        "  - level2A\n"
+        "    - level3A\n"
+        "  - level2B\n"
+        "- topB\n"
+    )
+    html = md_to_html(md)
+    assert html.count("<ul>") == 3
+    assert html.count("<li>") == 5
+    # topB must be a direct child of the outer <ul>, after level2's sublist
+    # has closed: <li>level2B</li></ul></li>\n<li>topB</li>
+    assert "</ul></li>\n<li>topB</li>" in html
+
+
 def test_margin_quote_after_blank_line_stays_out_of_list():
     md = (
         "- 在动手做出有趣东西的过程中，你能够：\n"
