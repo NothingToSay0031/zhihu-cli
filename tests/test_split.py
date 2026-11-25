@@ -80,3 +80,19 @@ def test_series_lead():
     lead = series_lead("T", 1, 3)
     assert "第 1 / 3 篇" in lead
     assert lead.startswith(">")
+
+
+def test_tilde_line_inside_backtick_fence_does_not_break_atomic_block():
+    """A '~~~~~' content line inside a ``` block must not close the fence.
+
+    Regression: the old _FENCE_RE matched any line starting with ~~~, so the
+    block was split in two and parts could begin/end mid-code-block.
+    """
+    fence = "```text\ncode\n   ~~~~~\n```\n"
+    body = "# Real\n\n" + ("y" * 30) + "\n"
+    text = fence + body
+    parts = split_markdown(text, max_chars=45)
+    assert "".join(parts) == text
+    # The tilde line and its fence stay together in one part.
+    assert any("~~~~~" in p and p.count("```") % 2 == 0 for p in parts)
+    assert all(not p.lstrip().startswith("```\n") or p.count("```") % 2 == 0 for p in parts)

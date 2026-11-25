@@ -7,6 +7,8 @@ import re
 from pathlib import Path
 from urllib.parse import quote
 
+from .fence import fence_open, is_fence_close, is_fence_open
+
 _BOLD_RE = re.compile(r"\*\*(.+?)\*\*")
 _CODE_RE = re.compile(r"`([^`]+?)`")
 _LINK_RE = re.compile(r"\[([^\]]+)\]\(([^)\s]+)\)")
@@ -17,9 +19,6 @@ _OL_RE = re.compile(r"^\s*\d+[.、]\s+(.*)")
 _QUOTE_RE = re.compile(r"^\s*>\s?(.*)")
 _HR_RE = re.compile(r"^\s*([-*_])(\s*\1){2,}\s*$")
 _TABLE_SEP_RE = re.compile(r"^\|?[\s:\-|]+\|?\s*$")
-_FENCE_RE = re.compile(r"^```|^~~~")
-_FENCE_MARKER_RE = re.compile(r"^(`{3,}|~{3,})(.*)$", re.S)
-_FENCE_CLOSE_RE = re.compile(r"^(`{3,}|~{3,})\s*$")
 _DISPLAY_MATH_RE = re.compile(r"\$\$([\s\S]+?)\$\$")
 _INLINE_MATH_RE = re.compile(
     r"(?<!\$)\$(?!\$)([^\s$](?:[^$\n]*[^\s$])?)\$(?!\$)"
@@ -29,21 +28,12 @@ _SLOT_RE = re.compile(r"@@@ZHIHU_PH_(\d+)@@@")
 
 def _is_fence_open(line: str) -> bool:
     """True if line opens a fenced code block (``` or ~~~, 3+ chars)."""
-    return bool(_FENCE_MARKER_RE.match(line.strip()))
+    return is_fence_open(line)
 
 
 def _is_fence_close(line: str, open_char: str, open_len: int) -> bool:
-    """True if line closes a fence opened with `open_char` of length `open_len`.
-
-    CommonMark: closing fence must use the SAME char, be AT LEAST as long, and
-    carry no info string. This prevents e.g. a `~~~~~` line inside a ```
-    block from being mistaken for the closing fence.
-    """
-    m = _FENCE_CLOSE_RE.match(line.strip())
-    if not m:
-        return False
-    fence = m.group(1)
-    return fence[0] == open_char and len(fence) >= open_len
+    """True if line closes a fence opened with `open_char` of length `open_len`."""
+    return is_fence_close(line, open_char, open_len)
 
 
 def _read_fence(lines: list[str], start: int, n: int) -> tuple[list[str], int]:
@@ -52,9 +42,7 @@ def _read_fence(lines: list[str], start: int, n: int) -> tuple[list[str], int]:
     Returns (code_lines, index_after_closing_fence). The opening line at
     `start` is assumed to be a valid fence opener.
     """
-    marker = _FENCE_MARKER_RE.match(lines[start].strip())
-    open_char = marker.group(1)[0]
-    open_len = len(marker.group(1))
+    open_char, open_len, _ = fence_open(lines[start])
     buf: list[str] = []
     i = start + 1
     while i < n and not _is_fence_close(lines[i], open_char, open_len):
@@ -283,7 +271,7 @@ def _emit_list(
         if _is_fence_open(line):
             if _fence_then_item(lines, i, n, is_item, other_item, base_indent):
                 fence = line.strip()
-                lang = _FENCE_MARKER_RE.match(fence).group(2).strip()
+                lang = fence_open(fence)[2]
                 buf, i = _read_fence(lines, i, n)
                 code = html.escape("\n".join(buf))
                 lang_attr = f' lang="{lang}"' if lang else ""
@@ -368,7 +356,7 @@ def md_to_html(md_text: str, image_map: dict[str, dict] | None = None) -> str:
 
         if _is_fence_open(line):
             close_table()
-            lang = _FENCE_MARKER_RE.match(line.strip()).group(2).strip()
+            lang = fence_open(line)[2]
             buf, i = _read_fence(lines, i, n)
             code = html.escape("\n".join(buf))
             lang_attr = f' lang="{lang}"' if lang else ""

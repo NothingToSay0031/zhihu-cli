@@ -5,8 +5,8 @@ from __future__ import annotations
 import re
 
 from . import config
+from .fence import fence_open, is_fence_open, is_fence_close
 
-_FENCE_RE = re.compile(r"^```|^~~~")
 _HEADING_RE = re.compile(r"^(#{1,6})\s+\S")
 
 
@@ -58,21 +58,24 @@ class _Scan:
     """Track fenced-code / display-math so we do not cut inside them."""
 
     def __init__(self) -> None:
-        self.in_fence = False
+        self.fence_char: str | None = None
+        self.fence_len = 0
         self.in_math = False
 
     @property
     def protected(self) -> bool:
-        return self.in_fence or self.in_math
+        return self.fence_char is not None or self.in_math
 
     def observe(self, line: str) -> None:
         stripped = line.strip()
-        if self.in_fence:
-            if _FENCE_RE.match(stripped):
-                self.in_fence = False
+        if self.fence_char is not None:
+            if is_fence_close(line, self.fence_char, self.fence_len):
+                self.fence_char = None
+                self.fence_len = 0
             return
-        if _FENCE_RE.match(stripped):
-            self.in_fence = True
+        marker = fence_open(line)
+        if marker:
+            self.fence_char, self.fence_len, _ = marker
             return
         if self.in_math:
             if "$$" in stripped:
@@ -155,9 +158,11 @@ def _atomic_blocks(text: str) -> list[str]:
     i = 0
     while i < n:
         stripped = lines[i].strip()
-        if _FENCE_RE.match(stripped):
+        marker = fence_open(lines[i])
+        if marker:
+            open_char, open_len, _ = marker
             j = i + 1
-            while j < n and not _FENCE_RE.match(lines[j].strip()):
+            while j < n and not is_fence_close(lines[j], open_char, open_len):
                 j += 1
             j = min(j + 1, n)
             blocks.append("".join(lines[i:j]))
@@ -174,7 +179,7 @@ def _atomic_blocks(text: str) -> list[str]:
         j = i + 1
         while j < n and lines[j].strip():
             nxt = lines[j].strip()
-            if _FENCE_RE.match(nxt) or (
+            if is_fence_open(nxt) or (
                 nxt.startswith("$$") and "$$" not in nxt[2:]
             ):
                 break
