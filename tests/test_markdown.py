@@ -185,3 +185,33 @@ def test_text_then_display_math_not_merged():
     assert "$$" not in html
     assert "<p>前文</p>" in html
     assert "<p>后文</p>" in html
+
+
+def test_backtick_fence_ignores_tilde_content_line():
+    """A '~~~~~' line inside a ``` block is content, not a closing fence.
+
+    Regression: the old _FENCE_RE matched any line starting with ``` or ~~~,
+    so a tilde annotation inside a backtick fence closed the block early and
+    the real fence opened a huge <pre> that swallowed formulas and prose.
+    """
+    md = "```text\ncode\n   ~~~~~\n```\n\n正文：\n\n$$\nx+1\n$$\n\n结束。\n"
+    html = md_to_html(md)
+    # Exactly one <pre>, containing both 'code' and the tilde line.
+    assert html.count("<pre") == 1
+    assert "code" in html and "~~~~~" in html
+    # The formula after the fence must be converted, not left as raw $$.
+    assert "$$" not in html
+    assert 'eeimg="2"' in html
+    assert "正文" in html and "结束" in html
+
+
+def test_fence_closing_must_use_same_char():
+    """Closing fence must match the opener's char and length (CommonMark)."""
+    # tilde fence whose content contains ``` -> not a premature close
+    html = md_to_html("~~~text\na\n```\nb\n~~~\n\n尾。\n")
+    assert html.count("<pre") == 1
+    assert "```" in html and "尾。" in html
+    # longer closing fence is valid
+    html2 = md_to_html("```\nx\n`````\n\n尾。\n")
+    assert html2.count("<pre") == 1
+    assert "尾。" in html2

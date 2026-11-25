@@ -18,11 +18,52 @@ _QUOTE_RE = re.compile(r"^\s*>\s?(.*)")
 _HR_RE = re.compile(r"^\s*([-*_])(\s*\1){2,}\s*$")
 _TABLE_SEP_RE = re.compile(r"^\|?[\s:\-|]+\|?\s*$")
 _FENCE_RE = re.compile(r"^```|^~~~")
+_FENCE_MARKER_RE = re.compile(r"^(`{3,}|~{3,})(.*)$", re.S)
+_FENCE_CLOSE_RE = re.compile(r"^(`{3,}|~{3,})\s*$")
 _DISPLAY_MATH_RE = re.compile(r"\$\$([\s\S]+?)\$\$")
 _INLINE_MATH_RE = re.compile(
     r"(?<!\$)\$(?!\$)([^\s$](?:[^$\n]*[^\s$])?)\$(?!\$)"
 )
 _SLOT_RE = re.compile(r"@@@ZHIHU_PH_(\d+)@@@")
+
+
+def _is_fence_open(line: str) -> bool:
+    """True if line opens a fenced code block (``` or ~~~, 3+ chars)."""
+    return bool(_FENCE_MARKER_RE.match(line.strip()))
+
+
+def _is_fence_close(line: str, open_char: str, open_len: int) -> bool:
+    """True if line closes a fence opened with `open_char` of length `open_len`.
+
+    CommonMark: closing fence must use the SAME char, be AT LEAST as long, and
+    carry no info string. This prevents e.g. a `~~~~~` line inside a ```
+    block from being mistaken for the closing fence.
+    """
+    m = _FENCE_CLOSE_RE.match(line.strip())
+    if not m:
+        return False
+    fence = m.group(1)
+    return fence[0] == open_char and len(fence) >= open_len
+
+
+def _read_fence(lines: list[str], start: int, n: int) -> tuple[list[str], int]:
+    """Consume a fenced block starting at `start`.
+
+    Returns (code_lines, index_after_closing_fence). The opening line at
+    `start` is assumed to be a valid fence opener.
+    """
+    marker = _FENCE_MARKER_RE.match(lines[start].strip())
+    open_char = marker.group(1)[0]
+    open_len = len(marker.group(1))
+    buf: list[str] = []
+    i = start + 1
+    while i < n and not _is_fence_close(lines[i], open_char, open_len):
+        buf.append(lines[i])
+        i += 1
+    # skip the closing fence line (if present); if unterminated, i == n
+    if i < n:
+        i += 1
+    return buf, i
 
 
 def extract_local_images(md_text: str, base_dir: Path) -> dict[str, Path]:
@@ -136,15 +177,8 @@ def _fence_then_item(
 ) -> bool:
     """True if the fenced block at lines[j] is followed (after its closing
     fence) by a list item that resumes the current list."""
-    k = j + 1
-    while k < n:
-        if not lines[k].strip():
-            k += 1
-            continue
-        if _FENCE_RE.match(lines[k].strip()):
-            k += 1
-            break
-        k += 1
+    # Skip the whole fenced block using matching closing fence.
+    _, k = _read_fence(lines, j, n)
     while k < n:
         line = lines[k].rstrip()
         if not line.strip():
@@ -212,7 +246,7 @@ def _emit_list(
                 or (nxt_indent > base_indent and _QUOTE_RE.match(nxt))
                 or _is_li_continuation(nxt)
                 or (
-                    _FENCE_RE.match(nxt.strip())
+                    _is_fence_open(nxt)
                     and _fence_then_item(lines, j, n, is_item, other_item, base_indent)
                 )
             ):
@@ -246,16 +280,11 @@ def _emit_list(
                 nested.append("".join(sub))
                 continue
             break
-        if _FENCE_RE.match(line.strip()):
+        if _is_fence_open(line):
             if _fence_then_item(lines, i, n, is_item, other_item, base_indent):
                 fence = line.strip()
-                lang = fence[3:].strip()
-                buf: list[str] = []
-                i += 1
-                while i < n and not _FENCE_RE.match(lines[i].strip()):
-                    buf.append(lines[i])
-                    i += 1
-                i += 1
+                lang = _FENCE_MARKER_RE.match(fence).group(2).strip()
+                buf, i = _read_fence(lines, i, n)
                 code = html.escape("\n".join(buf))
                 lang_attr = f' lang="{lang}"' if lang else ""
                 pre = f"<pre{lang_attr}>{code}</pre>"
@@ -304,7 +333,7 @@ def _is_li_continuation(line: str) -> bool:
     return (
         bool(re.match(r"^\s+\S", line))
         and not _HEADING_RE.match(s)
-        and not _FENCE_RE.match(s)
+        and not _is_fence_open(s)
         and not _HR_RE.match(s)
         and not s.startswith("|")
         and not s.startswith("$$")
@@ -337,15 +366,10 @@ def md_to_html(md_text: str, image_map: dict[str, dict] | None = None) -> str:
             i += 1
             continue
 
-        if _FENCE_RE.match(line.strip()):
+        if _is_fence_open(line):
             close_table()
-            lang = line.strip()[3:].strip()
-            buf: list[str] = []
-            i += 1
-            while i < n and not _FENCE_RE.match(lines[i].strip()):
-                buf.append(lines[i])
-                i += 1
-            i += 1
+            lang = _FENCE_MARKER_RE.match(line.strip()).group(2).strip()
+            buf, i = _read_fence(lines, i, n)
             code = html.escape("\n".join(buf))
             lang_attr = f' lang="{lang}"' if lang else ""
             out.append(f"<pre{lang_attr}>{code}</pre>")
@@ -431,7 +455,8 @@ def md_to_html(md_text: str, image_map: dict[str, dict] | None = None) -> str:
             i < n
             and lines[i].strip()
             and not _QUOTE_RE.match(lines[i])
-            and not lines[i].lstrip().startswith(("#", "|", ">", "```", "~~~", "$$"))
+            and not lines[i].lstrip().startswith(("#", "|", ">", "$$"))
+            and not _is_fence_open(lines[i])
             and not _UL_RE.match(lines[i])
             and not _OL_RE.match(lines[i])
             and not _HR_RE.match(lines[i].strip())
